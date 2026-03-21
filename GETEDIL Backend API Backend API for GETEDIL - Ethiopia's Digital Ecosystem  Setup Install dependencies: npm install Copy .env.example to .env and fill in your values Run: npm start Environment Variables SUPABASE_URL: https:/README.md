@@ -1,0 +1,13 @@
+GETEDIL Backend API
+Backend API for GETEDIL - Ethiopia's Digital Ecosystem
+
+Setup
+Install dependencies: npm install
+Copy .env.example to .env and fill in your values
+Run: npm start
+Environment Variables
+SUPABASE_URL: https://txhcnsxzcbkoroyasmlc.supabase.co
+SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR4aGNuc3h6Y2Jrb3JveWFzbWxjIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDEwNzY2NiwiZXhwIjoyMDg5NjgzNjY2fQ.2C7mSAbWeqtv2pvl_6hxQF25Y8ks3pd8VdDSHOzQePk
+JWT_SECRET: lFM8F09jsG7lPdsr0nsEj9A50xdTe4CGDUZCbExAf8CxtmT1H2tYdoaTFJ39BVOIz3yqO5zJfo0hCzRCW4vqhHjpYQ8ucXWK
+JWT_REFRESH_SECRET: ZO3IAd1ZDRm2lAhWbD1fyUXyXeg7ylCS5KBGv8TI4Lhs1hA0GzSXwOUMpXcJqTieUaYdiJxTPZJg5K8uhgfP6r1JJYtiswM2
+Activity
