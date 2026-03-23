@@ -365,34 +365,64 @@ app.get('/api/orders', async (req, res) => {
 });
 
 // Create order
+// In server.js, make sure this endpoint exists:
+
 app.post('/api/orders', async (req, res) => {
-    const token = req.headers.authorization?.split(' ')[1];
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
-    if (!token) {
-        return res.status(401).json({ error: 'Not authenticated' });
+    if (authError) throw authError;
+    
+    const { items, total_amount, shipping_address } = req.body;
+    const orderNumber = 'ORD-' + Date.now();
+    
+    // Insert order
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .insert({
+        order_number: orderNumber,
+        user_id: user.id,
+        total_amount,
+        status: 'pending',
+        shipping_address
+      })
+      .select()
+      .single();
+    
+    if (orderError) {
+      console.error('Order insert error:', orderError);
+      return res.status(500).json({ error: orderError.message });
     }
     
-    try {
-        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-        
-        if (authError) throw authError;
-        
-        const { items, total_amount, shipping_address } = req.body;
-        const orderNumber = 'ORD-' + Date.now();
-        
-        const { data: order, error: orderError } = await supabase
-            .from('orders')
-            .insert({
-                order_number: orderNumber,
-                user_id: user.id,
-                total_amount,
-                status: 'pending',
-                shipping_address
-            })
-            .select()
-            .single();
-        
-        if (orderError) throw orderError;
+    // Insert order items
+    for (const item of items) {
+      const { error: itemError } = await supabase
+        .from('order_items')
+        .insert({
+          order_id: order.id,
+          product_id: item.id,
+          product_name: item.name,
+          quantity: item.quantity,
+          price: item.price
+        });
+      
+      if (itemError) {
+        console.error('Order item error:', itemError);
+      }
+    }
+    
+    res.json({ order, orderNumber });
+  } catch (error) {
+    console.error('Error creating order:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
         
         // Add order items
         for (const item of items) {
