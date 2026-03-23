@@ -1,9 +1,11 @@
-// server.js - COMPLETE WITH EMAIL VERIFICATION & PASSWORD RESET
+// server.js - COMPLETE WITH IMAGE UPLOAD
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 const app = express();
@@ -14,6 +16,21 @@ const supabase = createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+
+// Configure multer for memory storage
+const storage = multer.memoryStorage();
+const upload = multer({ 
+    storage,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    fileFilter: (req, file, cb) => {
+        const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
+        if (allowedTypes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Invalid file type. Only JPEG, PNG, and WEBP are allowed.'));
+        }
+    }
+});
 
 // Email Configuration
 const transporter = nodemailer.createTransport({
@@ -27,15 +44,6 @@ const transporter = nodemailer.createTransport({
 // Middleware
 app.use(cors());
 app.use(express.json());
-
-// ==================== HEALTH CHECK ====================
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'healthy', 
-        timestamp: new Date().toISOString(),
-        message: 'GETEDIL API is running!'
-    });
-});
 
 // ==================== HELPER FUNCTIONS ====================
 function generateVerificationToken() {
@@ -73,7 +81,6 @@ async function sendVerificationEmail(email, name, token) {
                         <a href="${verificationLink}" class="button">Verify Email Address</a>
                     </div>
                     <p style="margin-top: 20px; color: #666; font-size: 12px;">This link expires in 24 hours.</p>
-                    <p style="color: #666; font-size: 12px;">If you didn't create an account, you can ignore this email.</p>
                 </div>
                 <div class="footer">
                     <p>© 2026 GETEDIL - Ethiopia's Digital Ecosystem</p>
@@ -123,7 +130,7 @@ async function sendPasswordResetEmail(email, name, token) {
                         <a href="${resetLink}" class="button">Reset Password</a>
                     </div>
                     <div class="warning">
-                        <strong>⚠️ Security Notice:</strong> This link will expire in 1 hour. If you didn't request this, please ignore this email.
+                        <strong>⚠️ Security Notice:</strong> This link will expire in 1 hour.
                     </div>
                 </div>
                 <div class="footer">
@@ -142,9 +149,67 @@ async function sendPasswordResetEmail(email, name, token) {
     });
 }
 
+// ==================== HEALTH CHECK ====================
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'healthy', 
+        timestamp: new Date().toISOString(),
+        message: 'GETEDIL API is running!'
+    });
+});
+
+// ==================== IMAGE UPLOAD ENDPOINT ====================
+app.post('/api/upload-image', upload.single('image'), async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        if (!req.file) {
+            return res.status(400).json({ error: 'No image file provided' });
+        }
+        
+        // Generate unique filename
+        const fileExt = req.file.originalname.split('.').pop();
+        const fileName = `${uuidv4()}.${fileExt}`;
+        const filePath = `products/${fileName}`;
+        
+        // Upload to Supabase Storage
+        const { data, error } = await supabase.storage
+            .from('product-images')
+            .upload(filePath, req.file.buffer, {
+                contentType: req.file.mimetype,
+                cacheControl: '3600'
+            });
+        
+        if (error) throw error;
+        
+        // Get public URL
+        const { data: urlData } = supabase.storage
+            .from('product-images')
+            .getPublicUrl(filePath);
+        
+        const imageUrl = urlData.publicUrl;
+        
+        res.json({ 
+            success: true, 
+            imageUrl,
+            filePath,
+            message: 'Image uploaded successfully!'
+        });
+    } catch (error) {
+        console.error('Upload error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ==================== USER ENDPOINTS ====================
 
-// Get user count
 app.get('/api/users/count', async (req, res) => {
     try {
         const { data, error } = await supabase
@@ -158,12 +223,10 @@ app.get('/api/users/count', async (req, res) => {
     }
 });
 
-// REGISTER with email verification
 app.post('/api/register', async (req, res) => {
     const { name, email, password, role = 'user' } = req.body;
     
     try {
-        // Check if user exists
         const { data: existing } = await supabase
             .from('users')
             .select('id')
@@ -174,7 +237,6 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ error: 'User already exists' });
         }
         
-        // Create user in Supabase Auth
         const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
             email,
             password,
@@ -184,12 +246,10 @@ app.post('/api/register', async (req, res) => {
         
         if (authError) throw authError;
         
-        // Generate verification token
         const verificationToken = generateVerificationToken();
         const tokenExpiry = new Date();
         tokenExpiry.setHours(tokenExpiry.getHours() + 24);
         
-        // Create user profile
         const { data: user, error: userError } = await supabase
             .from('users')
             .insert({
@@ -207,7 +267,6 @@ app.post('/api/register', async (req, res) => {
         
         if (userError) throw userError;
         
-        // Send verification email
         try {
             await sendVerificationEmail(email, name, verificationToken);
         } catch (emailError) {
@@ -231,12 +290,10 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// Verify email
 app.post('/api/verify-email', async (req, res) => {
     const { token } = req.body;
     
     try {
-        // Find user with this token
         const { data: user, error } = await supabase
             .from('users')
             .select('*')
@@ -247,13 +304,11 @@ app.post('/api/verify-email', async (req, res) => {
             return res.status(400).json({ error: 'Invalid or expired verification token' });
         }
         
-        // Check if token expired
         if (new Date(user.verification_token_expires) < new Date()) {
             return res.status(400).json({ error: 'Verification token has expired' });
         }
         
-        // Update user as verified
-        const { error: updateError } = await supabase
+        await supabase
             .from('users')
             .update({ 
                 email_verified: true,
@@ -262,9 +317,6 @@ app.post('/api/verify-email', async (req, res) => {
             })
             .eq('id', user.id);
         
-        if (updateError) throw updateError;
-        
-        // Also update auth user metadata
         await supabase.auth.admin.updateUserById(user.id, {
             email_confirm: true,
             user_metadata: { ...user.user_metadata, email_verified: true }
@@ -277,7 +329,6 @@ app.post('/api/verify-email', async (req, res) => {
     }
 });
 
-// Resend verification email
 app.post('/api/resend-verification', async (req, res) => {
     const { email } = req.body;
     
@@ -316,7 +367,6 @@ app.post('/api/resend-verification', async (req, res) => {
     }
 });
 
-// LOGIN - check if email verified
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     
@@ -356,7 +406,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// FORGOT PASSWORD - Send reset email
 app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
     
@@ -368,11 +417,9 @@ app.post('/api/forgot-password', async (req, res) => {
             .single();
         
         if (error || !user) {
-            // Don't reveal that user doesn't exist for security
             return res.json({ success: true, message: 'If an account exists, a reset link will be sent.' });
         }
         
-        // Generate reset token
         const resetToken = generateVerificationToken();
         const tokenExpiry = new Date();
         tokenExpiry.setHours(tokenExpiry.getHours() + 1);
@@ -394,7 +441,6 @@ app.post('/api/forgot-password', async (req, res) => {
     }
 });
 
-// RESET PASSWORD
 app.post('/api/reset-password', async (req, res) => {
     const { token, newPassword } = req.body;
     
@@ -413,12 +459,10 @@ app.post('/api/reset-password', async (req, res) => {
             return res.status(400).json({ error: 'Reset token has expired' });
         }
         
-        // Update password in Supabase Auth
         await supabase.auth.admin.updateUserById(user.id, {
             password: newPassword
         });
         
-        // Clear reset token
         await supabase
             .from('users')
             .update({
@@ -434,7 +478,6 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
-// GET CURRENT USER
 app.get('/api/user', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     
@@ -465,7 +508,6 @@ app.get('/api/user', async (req, res) => {
     }
 });
 
-// UPDATE USER PROFILE
 app.put('/api/user/profile', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     
@@ -479,14 +521,11 @@ app.put('/api/user/profile', async (req, res) => {
         
         const { name, phone, bio } = req.body;
         
-        const { error: updateError } = await supabase
+        await supabase
             .from('users')
             .update({ full_name: name, phone, bio })
             .eq('id', user.id);
         
-        if (updateError) throw updateError;
-        
-        // Update auth metadata
         await supabase.auth.admin.updateUserById(user.id, {
             user_metadata: { full_name: name }
         });
@@ -499,7 +538,6 @@ app.put('/api/user/profile', async (req, res) => {
 
 // ==================== PRODUCTS ENDPOINTS ====================
 
-// Get all products
 app.get('/api/products', async (req, res) => {
     try {
         const { data, error } = await supabase
@@ -516,7 +554,6 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// Get single product
 app.get('/api/products/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -534,7 +571,6 @@ app.get('/api/products/:id', async (req, res) => {
     }
 });
 
-// Search products
 app.get('/api/products/search', async (req, res) => {
     try {
         const { q, category, minPrice, maxPrice, sortBy } = req.query;
@@ -578,7 +614,6 @@ app.get('/api/products/search', async (req, res) => {
     }
 });
 
-// CREATE PRODUCT with image upload
 app.post('/api/products', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     
@@ -619,7 +654,6 @@ app.post('/api/products', async (req, res) => {
 
 // ==================== REVIEWS ENDPOINTS ====================
 
-// Get product reviews
 app.get('/api/products/:id/reviews', async (req, res) => {
     try {
         const { id } = req.params;
@@ -637,7 +671,6 @@ app.get('/api/products/:id/reviews', async (req, res) => {
     }
 });
 
-// Add review
 app.post('/api/products/:id/reviews', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     
@@ -673,7 +706,6 @@ app.post('/api/products/:id/reviews', async (req, res) => {
 
 // ==================== ORDERS ENDPOINTS ====================
 
-// Get user orders
 app.get('/api/orders', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     
@@ -699,7 +731,6 @@ app.get('/api/orders', async (req, res) => {
     }
 });
 
-// Get single order
 app.get('/api/orders/:id', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     
@@ -726,7 +757,6 @@ app.get('/api/orders/:id', async (req, res) => {
     }
 });
 
-// Create order
 app.post('/api/orders', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     
@@ -778,7 +808,8 @@ app.post('/api/orders', async (req, res) => {
 
 // ==================== EMAIL FUNCTIONS ====================
 
-// Send Order Confirmation Email
+// CONTINUATION OF server.js
+
 app.post('/api/email/order-confirmation', async (req, res) => {
     const { email, name, orderNumber, total, items, shippingAddress } = req.body;
     
@@ -865,7 +896,6 @@ app.post('/api/email/order-confirmation', async (req, res) => {
     }
 });
 
-// Send Contact Email
 app.post('/api/email/contact', async (req, res) => {
     const { name, email, subject, message } = req.body;
     
@@ -904,6 +934,7 @@ app.post('/api/email/contact', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
     console.log(`📧 Email notifications enabled`);
+    console.log(`📸 Image upload enabled`);
 });
 
 module.exports = app;
