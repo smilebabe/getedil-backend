@@ -983,6 +983,129 @@ app.post('/api/orders', async (req, res) => {
     }
 });
 
+// ==================== SELLER ANALYTICS ENDPOINTS ====================
+
+// Get seller analytics
+app.get('/api/seller/analytics', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        const { period = 'week' } = req.query;
+        
+        // Get seller's products
+        const { data: products, error: productsError } = await supabase
+            .from('digital_products')
+            .select('id, name, price')
+            .eq('seller_id', user.id);
+        
+        if (productsError) throw productsError;
+        
+        const productIds = products.map(p => p.id);
+        
+        // Calculate date range
+        let interval = '7 days';
+        if (period === 'month') interval = '30 days';
+        if (period === 'year') interval = '365 days';
+        
+        // Get orders for seller's products
+        const { data: orderItems, error: ordersError } = await supabase
+            .from('order_items')
+            .select(`
+                *,
+                orders!inner (created_at, order_number, status)
+            `)
+            .in('product_id', productIds)
+            .gte('orders.created_at', new Date(new Date() - new Date(interval)).toISOString());
+        
+        if (ordersError) throw ordersError;
+        
+        // Calculate totals
+        const totalRevenue = orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        const totalOrders = new Set(orderItems.map(item => item.order_id)).size;
+        
+        // Daily sales data
+        const dailySales = {};
+        orderItems.forEach(item => {
+            const date = new Date(item.orders.created_at).toISOString().split('T')[0];
+            if (!dailySales[date]) {
+                dailySales[date] = { date, revenue: 0, orders: 0 };
+            }
+            dailySales[date].revenue += item.price * item.quantity;
+            dailySales[date].orders += 1;
+        });
+        
+        // Top products
+        const productSales = {};
+        orderItems.forEach(item => {
+            const product = products.find(p => p.id === item.product_id);
+            if (!productSales[item.product_id]) {
+                productSales[item.product_id] = {
+                    id: item.product_id,
+                    name: product?.name || 'Unknown',
+                    sales: 0,
+                    revenue: 0
+                };
+            }
+            productSales[item.product_id].sales += item.quantity;
+            productSales[item.product_id].revenue += item.price * item.quantity;
+        });
+        
+        const topProducts = Object.values(productSales).sort((a, b) => b.sales - a.sales).slice(0, 5);
+        
+        // Category breakdown
+        const categorySales = {};
+        orderItems.forEach(item => {
+            const product = products.find(p => p.id === item.product_id);
+            const category = product?.category || 'uncategorized';
+            if (!categorySales[category]) {
+                categorySales[category] = { category, sales: 0 };
+            }
+            categorySales[category].sales += item.quantity;
+        });
+        
+        const categoryBreakdown = Object.values(categorySales).map(c => ({
+            category: c.category,
+            sales: c.sales
+        }));
+        
+        // Recent orders
+        const recentOrders = orderItems
+            .sort((a, b) => new Date(b.orders.created_at) - new Date(a.orders.created_at))
+            .slice(0, 10)
+            .map(item => ({
+                id: item.order_id,
+                order_number: item.orders.order_number,
+                product_name: products.find(p => p.id === item.product_id)?.name || 'Unknown',
+                amount: item.price * item.quantity,
+                status: item.orders.status,
+                created_at: item.orders.created_at
+            }));
+        
+        res.json({
+            totalRevenue,
+            totalOrders,
+            totalProducts: productIds.length,
+            avgOrderValue: totalOrders > 0 ? (totalRevenue / totalOrders).toFixed(2) : 0,
+            conversionRate: ((totalOrders / (totalOrders + 100)) * 100).toFixed(1),
+            dailySales: Object.values(dailySales).sort((a, b) => a.date.localeCompare(b.date)),
+            topProducts,
+            categoryBreakdown,
+            recentOrders
+        });
+        
+    } catch (error) {
+        console.error('Analytics error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ==================== EMAIL FUNCTIONS ====================
 
 app.post('/api/email/order-confirmation', async (req, res) => {
