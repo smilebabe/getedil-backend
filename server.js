@@ -1,4 +1,4 @@
-// server.js - COMPLETE WITH IMAGE UPLOAD
+// server.js - COMPLETE WITH RELATED PRODUCTS ENDPOINT
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
@@ -21,7 +21,7 @@ const supabase = createClient(
 const storage = multer.memoryStorage();
 const upload = multer({ 
     storage,
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
         if (allowedTypes.includes(file.mimetype)) {
@@ -174,12 +174,10 @@ app.post('/api/upload-image', upload.single('image'), async (req, res) => {
             return res.status(400).json({ error: 'No image file provided' });
         }
         
-        // Generate unique filename
         const fileExt = req.file.originalname.split('.').pop();
         const fileName = `${uuidv4()}.${fileExt}`;
         const filePath = `products/${fileName}`;
         
-        // Upload to Supabase Storage
         const { data, error } = await supabase.storage
             .from('product-images')
             .upload(filePath, req.file.buffer, {
@@ -189,7 +187,6 @@ app.post('/api/upload-image', upload.single('image'), async (req, res) => {
         
         if (error) throw error;
         
-        // Get public URL
         const { data: urlData } = supabase.storage
             .from('product-images')
             .getPublicUrl(filePath);
@@ -571,6 +568,39 @@ app.get('/api/products/:id', async (req, res) => {
     }
 });
 
+// ==================== RELATED PRODUCTS ENDPOINT ====================
+app.get('/api/products/related/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Get current product category
+        const { data: current, error: currentError } = await supabase
+            .from('digital_products')
+            .select('category')
+            .eq('id', id)
+            .single();
+        
+        if (currentError || !current) {
+            return res.status(404).json({ error: 'Product not found' });
+        }
+        
+        // Find related products by same category
+        const { data, error } = await supabase
+            .from('digital_products')
+            .select('*')
+            .eq('category', current.category)
+            .eq('status', 'active')
+            .neq('id', id)
+            .limit(4);
+        
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        console.error('Error fetching related products:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get('/api/products/search', async (req, res) => {
     try {
         const { q, category, minPrice, maxPrice, sortBy } = req.query;
@@ -808,8 +838,6 @@ app.post('/api/orders', async (req, res) => {
 
 // ==================== EMAIL FUNCTIONS ====================
 
-// CONTINUATION OF server.js
-
 app.post('/api/email/order-confirmation', async (req, res) => {
     const { email, name, orderNumber, total, items, shippingAddress } = req.body;
     
@@ -935,6 +963,7 @@ app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
     console.log(`📧 Email notifications enabled`);
     console.log(`📸 Image upload enabled`);
+    console.log(`🔗 Related products endpoint enabled`);
 });
 
 module.exports = app;
