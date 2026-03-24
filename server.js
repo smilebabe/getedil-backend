@@ -958,6 +958,179 @@ app.post('/api/email/contact', async (req, res) => {
     }
 });
 
+// ==================== COUPON ENDPOINTS ====================
+
+// Validate coupon
+app.post('/api/coupons/validate', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        const { code, subtotal } = req.body;
+        
+        if (!code) {
+            return res.status(400).json({ error: 'Coupon code required' });
+        }
+        
+        // Get coupon from database
+        const { data: coupon, error: couponError } = await supabase
+            .from('coupons')
+            .select('*')
+            .eq('code', code.toUpperCase())
+            .eq('active', true)
+            .single();
+        
+        if (couponError || !coupon) {
+            return res.status(404).json({ error: 'Invalid coupon code' });
+        }
+        
+        // Check validity dates
+        const now = new Date();
+        if (coupon.valid_from && new Date(coupon.valid_from) > now) {
+            return res.status(400).json({ error: 'Coupon not yet active' });
+        }
+        if (coupon.valid_until && new Date(coupon.valid_until) < now) {
+            return res.status(400).json({ error: 'Coupon has expired' });
+        }
+        
+        // Check usage limit
+        if (coupon.usage_limit && coupon.used_count >= coupon.usage_limit) {
+            return res.status(400).json({ error: 'Coupon usage limit reached' });
+        }
+        
+        // Check user usage limit
+        const { data: userUsage, error: usageError } = await supabase
+            .from('coupon_usage')
+            .select('*')
+            .eq('coupon_id', coupon.id)
+            .eq('user_id', user.id)
+            .maybeSingle();
+        
+        if (userUsage) {
+            return res.status(400).json({ error: 'You have already used this coupon' });
+        }
+        
+        // Check minimum purchase
+        if (subtotal < coupon.min_purchase) {
+            return res.status(400).json({ 
+                error: `Minimum purchase of ₿ ${coupon.min_purchase} required` 
+            });
+        }
+        
+        // Calculate discount
+        let discount = 0;
+        if (coupon.discount_type === 'percentage') {
+            discount = subtotal * (coupon.discount_value / 100);
+            if (coupon.max_discount && discount > coupon.max_discount) {
+                discount = coupon.max_discount;
+            }
+        } else {
+            discount = coupon.discount_value;
+        }
+        
+        discount = Math.min(discount, subtotal);
+        
+        res.json({
+            id: coupon.id,
+            code: coupon.code,
+            discount_type: coupon.discount_type,
+            discount_value: coupon.discount_value,
+            discount_amount: discount,
+            max_discount: coupon.max_discount,
+            min_purchase: coupon.min_purchase,
+            description: coupon.description
+        });
+        
+    } catch (error) {
+        console.error('Coupon validation error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Record coupon usage (called after order creation)
+app.post('/api/coupons/use', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        const { coupon_id, order_id, discount_amount } = req.body;
+        
+        if (!coupon_id) {
+            return res.status(400).json({ error: 'Coupon ID required' });
+        }
+        
+        // Record usage
+        const { error: usageError } = await supabase
+            .from('coupon_usage')
+            .insert({
+                coupon_id,
+                user_id: user.id,
+                order_id,
+                discount_amount
+            });
+        
+        if (usageError) throw usageError;
+        
+        // Increment coupon used count
+        await supabase
+            .from('coupons')
+            .update({ used_count: supabase.raw('used_count + 1') })
+            .eq('id', coupon_id);
+        
+        res.json({ success: true });
+        
+    } catch (error) {
+        console.error('Coupon usage error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get available coupons for user
+app.get('/api/coupons/available', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        const now = new Date().toISOString();
+        
+        const { data, error } = await supabase
+            .from('coupons')
+            .select('*')
+            .eq('active', true)
+            .lte('valid_from', now)
+            .gte('valid_until', now)
+            .lt('used_count', supabase.raw('usage_limit'))
+            .not('id', 'in', 
+                supabase.from('coupon_usage').select('coupon_id').eq('user_id', user.id)
+            );
+        
+        if (error) throw error;
+        res.json(data);
+        
+    } catch (error) {
+        console.error('Available coupons error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
