@@ -1106,6 +1106,104 @@ app.get('/api/seller/analytics', async (req, res) => {
     }
 });
 
+// ==================== BULK UPLOAD ENDPOINT ====================
+const multer = require('multer');
+const csv = require('csv-parser');
+const stream = require('stream');
+
+const csvUpload = multer({ storage: multer.memoryStorage() });
+
+app.post('/api/seller/bulk-upload', csvUpload.single('file'), async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+        
+        const results = [];
+        const errors = [];
+        let successCount = 0;
+        
+        const csvBuffer = req.file.buffer;
+        const readableStream = new stream.Readable();
+        readableStream.push(csvBuffer);
+        readableStream.push(null);
+        
+        await new Promise((resolve) => {
+            readableStream
+                .pipe(csv())
+                .on('data', async (row) => {
+                    const { name, description, price, is_free, category, file_format } = row;
+                    
+                    // Validate required fields
+                    if (!name) {
+                        errors.push(`Missing name in row: ${JSON.stringify(row)}`);
+                        return;
+                    }
+                    
+                    // Validate category
+                    const validCategories = ['documents', 'graphics', 'software', 'audio', 'video', 'ebooks', 'photos', '3d'];
+                    if (!validCategories.includes(category)) {
+                        errors.push(`Invalid category "${category}" for product "${name}". Valid: ${validCategories.join(', ')}`);
+                        return;
+                    }
+                    
+                    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                    const isFree = is_free === 'true' || is_free === true;
+                    const productPrice = isFree ? 0 : parseFloat(price) || 0;
+                    
+                    try {
+                        const { error: insertError } = await supabase
+                            .from('digital_products')
+                            .insert({
+                                seller_id: user.id,
+                                name,
+                                slug,
+                                description: description || '',
+                                price: productPrice,
+                                is_free: isFree,
+                                category: category || 'documents',
+                                file_format: file_format || 'pdf',
+                                status: 'active'
+                            });
+                        
+                        if (insertError) {
+                            errors.push(`Error inserting "${name}": ${insertError.message}`);
+                        } else {
+                            successCount++;
+                            results.push({ name, success: true });
+                        }
+                    } catch (err) {
+                        errors.push(`Error inserting "${name}": ${err.message}`);
+                    }
+                })
+                .on('end', () => {
+                    resolve();
+                });
+        });
+        
+        res.json({
+            success: errors.length === 0,
+            total: results.length + errors.length,
+            successCount,
+            failedCount: errors.length,
+            errors: errors.slice(0, 20) // Limit errors to 20
+        });
+        
+    } catch (error) {
+        console.error('Bulk upload error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ==================== EMAIL FUNCTIONS ====================
 
 app.post('/api/email/order-confirmation', async (req, res) => {
