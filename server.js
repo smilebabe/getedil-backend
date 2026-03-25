@@ -1965,7 +1965,7 @@ app.get('/api/newsletter/stats', async (req, res) => {
 // ==================== PUSH NOTIFICATION ENDPOINTS ====================
 
 webpush.setVapidDetails(
-  'mailto:notifications@getedil.com',
+  'mailto:bilucute08@gmail.com',
   process.env.VAPID_PUBLIC_KEY,
   process.env.VAPID_PRIVATE_KEY
 );
