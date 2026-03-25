@@ -1,3 +1,4 @@
+// server.js - COMPLETE WORKING VERSION
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
@@ -11,7 +12,6 @@ const PDFDocument = require('pdfkit');
 const webpush = require('web-push');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const FacebookStrategy = require('passport-facebook').Strategy;
 require('dotenv').config();
 
 const app = express();
@@ -151,102 +151,6 @@ async function sendPasswordResetEmail(email, name, token) {
         from: process.env.EMAIL_USER,
         to: email,
         subject: 'Reset Your GETEDIL Password',
-        html
-    });
-}
-
-// Send newsletter verification email
-async function sendNewsletterVerificationEmail(email, name, token) {
-    const verificationLink = `https://getedil.vercel.app/api/newsletter/verify?token=${token}`;
-    
-    const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>Verify Your Newsletter Subscription - GETEDIL</title>
-            <style>
-                body { font-family: Arial, sans-serif; background-color: #f5f5f5; margin: 0; padding: 0; }
-                .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; }
-                .header { background: linear-gradient(135deg, #0B4F2E, #D4AF37); padding: 30px; text-align: center; color: white; }
-                .content { padding: 30px; }
-                .button { display: inline-block; background-color: #0B4F2E; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin-top: 20px; }
-                .footer { background-color: #f5f5f5; padding: 20px; text-align: center; color: #666; font-size: 12px; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🏗️ GETEDIL</h1>
-                </div>
-                <div class="content">
-                    <h2>Confirm Your Subscription</h2>
-                    <p>Hello ${name || 'there'},</p>
-                    <p>Thank you for subscribing to the GETEDIL newsletter! You'll receive updates about new products, promotions, and platform news.</p>
-                    <div style="text-align: center;">
-                        <a href="${verificationLink}" class="button">Confirm Subscription</a>
-                    </div>
-                    <p style="margin-top: 20px; color: #666; font-size: 12px;">If you didn't subscribe to our newsletter, you can ignore this email.</p>
-                </div>
-                <div class="footer">
-                    <p>© 2026 GETEDIL - Ethiopia's Digital Ecosystem</p>
-                </div>
-            </div>
-        </body>
-        </html>
-    `;
-    
-    await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: email,
-        subject: 'Confirm Your GETEDIL Newsletter Subscription',
-        html
-    });
-}
-
-// Send newsletter email
-async function sendNewsletterEmail(email, name, subject, content, campaignId) {
-    const unsubscribeLink = `https://getedil.vercel.app/newsletter/unsubscribe?email=${encodeURIComponent(email)}`;
-    
-    const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>${subject}</title>
-            <style>
-                body { font-family: Arial, sans-serif; background-color: #f5f5f5; margin: 0; padding: 0; }
-                .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; }
-                .header { background: linear-gradient(135deg, #0B4F2E, #D4AF37); padding: 20px; text-align: center; color: white; }
-                .content { padding: 30px; line-height: 1.6; }
-                .footer { background-color: #f5f5f5; padding: 20px; text-align: center; color: #666; font-size: 12px; }
-                .unsubscribe { color: #666; text-decoration: underline; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🏗️ GETEDIL</h1>
-                </div>
-                <div class="content">
-                    <h2>Hello ${name || 'there'}!</h2>
-                    ${content}
-                </div>
-                <div class="footer">
-                    <p>© 2026 GETEDIL - Ethiopia's Digital Ecosystem</p>
-                    <p>
-                        <a href="${unsubscribeLink}" class="unsubscribe">Unsubscribe</a> from future emails.
-                    </p>
-                </div>
-            </div>
-        </body>
-        </html>
-    `;
-    
-    await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: email,
-        subject: subject,
         html
     });
 }
@@ -634,63 +538,6 @@ app.put('/api/user/profile', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-
-// Add to server.js
-
-// Create price alert
-app.post('/api/price-alerts', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  
-  try {
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError) throw authError;
-    
-    const { product_id, target_price, current_price } = req.body;
-    
-    const { error } = await supabase
-      .from('price_alerts')
-      .insert({
-        user_id: user.id,
-        product_id,
-        target_price,
-        current_price
-      });
-    
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Price alert error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Check price drops (run as cron job)
-async function checkPriceDrops() {
-  const { data: alerts } = await supabase
-    .from('price_alerts')
-    .select('*, products:digital_products(*)')
-    .eq('triggered', false);
-  
-  for (const alert of alerts) {
-    if (alert.products.price <= alert.target_price) {
-      // Send notification
-      await sendPushNotification(alert.user_id, 'Price Drop Alert!', `${alert.products.name} is now ₿ ${alert.products.price}`, `/products/${alert.product_id}`);
-      
-      // Send email
-      await sendPriceDropEmail(alert.user_id, alert.products);
-      
-      // Mark as triggered
-      await supabase
-        .from('price_alerts')
-        .update({ triggered: true })
-        .eq('id', alert.id);
-    }
-  }
-}
 
 // ==================== PRODUCTS ENDPOINTS ====================
 
@@ -1082,17 +929,17 @@ app.post('/api/orders', async (req, res) => {
         const orderNumber = 'ORD-' + Date.now();
         
         const { data: order, error: orderError } = await supabase
-    .from('orders')
-    .insert({
-        order_number: orderNumber,
-        user_id: user.id,
-        total_amount,
-        discount_amount: discount_amount || 0,
-        status: 'pending',
-        shipping_address
-    })
-    .select()
-    .single();
+            .from('orders')
+            .insert({
+                order_number: orderNumber,
+                user_id: user.id,
+                total_amount,
+                discount_amount: discount_amount || 0,
+                status: 'pending',
+                shipping_address
+            })
+            .select()
+            .single();
         
         if (orderError) {
             return res.status(500).json({ error: orderError.message });
@@ -1367,6 +1214,238 @@ app.post('/api/seller/bulk-upload', csvUpload.single('file'), async (req, res) =
     }
 });
 
+// ==================== PDF INVOICE ENDPOINT ====================
+app.get('/api/orders/:id/invoice', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        const { id } = req.params;
+        
+        const { data: order, error: orderError } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('id', id)
+            .eq('user_id', user.id)
+            .single();
+        
+        if (orderError || !order) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+        
+        const { data: items, error: itemsError } = await supabase
+            .from('order_items')
+            .select('*')
+            .eq('order_id', id);
+        
+        if (itemsError) throw itemsError;
+        
+        const { data: profile } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', user.id)
+            .single();
+        
+        const doc = new PDFDocument({ margin: 50, size: 'A4' });
+        
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=invoice_${order.order_number}.pdf`);
+        
+        doc.pipe(res);
+        
+        // Header
+        doc.fontSize(24).font('Helvetica-Bold').fillColor('#0B4F2E').text('GETEDIL', { align: 'center' });
+        doc.fontSize(12).font('Helvetica').fillColor('#666666').text('Ethiopia\'s Digital Ecosystem', { align: 'center' });
+        doc.moveDown();
+        doc.fontSize(20).font('Helvetica-Bold').fillColor('#000000').text('INVOICE', { align: 'center' });
+        doc.moveDown();
+        
+        doc.fontSize(10).font('Helvetica').fillColor('#333333');
+        doc.text(`Invoice Number: INV-${order.order_number}`, 50, 150);
+        doc.text(`Order Date: ${new Date(order.created_at).toLocaleDateString()}`, 50, 165);
+        doc.text(`Order Status: ${order.status.toUpperCase()}`, 50, 180);
+        
+        doc.text(`Bill To:`, 350, 150);
+        doc.text(`${profile?.full_name || 'Customer'}`, 350, 165);
+        doc.text(`${profile?.email || ''}`, 350, 180);
+        if (profile?.phone) doc.text(`${profile.phone}`, 350, 195);
+        
+        if (order.shipping_address) {
+            const addr = order.shipping_address;
+            doc.text(`Ship To:`, 350, 225);
+            doc.text(`${addr.full_name || ''}`, 350, 240);
+            doc.text(`${addr.address || ''}`, 350, 255);
+            doc.text(`${addr.city || ''}, ${addr.country || 'Ethiopia'}`, 350, 270);
+        }
+        
+        doc.moveDown(2);
+        
+        let yPosition = 320;
+        doc.font('Helvetica-Bold').fillColor('#0B4F2E').rect(50, yPosition - 5, 495, 25).fill('#F0FDF4');
+        doc.fillColor('#0B4F2E').text('Product', 60, yPosition).text('Quantity', 300, yPosition, { width: 80, align: 'center' }).text('Unit Price', 380, yPosition, { width: 80, align: 'center' }).text('Total', 460, yPosition, { width: 80, align: 'center' });
+        yPosition += 25;
+        
+        doc.font('Helvetica').fillColor('#333333');
+        let subtotal = 0;
+        items.forEach((item, index) => {
+            const total = item.price * item.quantity;
+            subtotal += total;
+            const productName = item.product_name.length > 40 ? item.product_name.substring(0, 37) + '...' : item.product_name;
+            doc.text(productName, 60, yPosition, { width: 230 })
+               .text(item.quantity.toString(), 300, yPosition, { width: 80, align: 'center' })
+               .text(`₿ ${item.price.toLocaleString()}`, 380, yPosition, { width: 80, align: 'center' })
+               .text(`₿ ${total.toLocaleString()}`, 460, yPosition, { width: 80, align: 'center' });
+            yPosition += 20;
+            if (yPosition > 700 && index < items.length - 1) {
+                doc.addPage();
+                yPosition = 50;
+            }
+        });
+        
+        yPosition += 20;
+        doc.font('Helvetica-Bold').text('Subtotal:', 380, yPosition, { width: 80, align: 'right' }).text(`₿ ${subtotal.toLocaleString()}`, 460, yPosition, { width: 80, align: 'right' });
+        yPosition += 20;
+        
+        const discount = order.discount_amount || 0;
+        if (discount > 0) {
+            doc.fillColor('#10B981').text('Discount:', 380, yPosition, { width: 80, align: 'right' }).text(`- ₿ ${discount.toLocaleString()}`, 460, yPosition, { width: 80, align: 'right' });
+            yPosition += 20;
+        }
+        
+        const total = order.total_amount;
+        doc.fillColor('#0B4F2E').font('Helvetica-Bold').fontSize(12).text('Total:', 380, yPosition, { width: 80, align: 'right' }).text(`₿ ${total.toLocaleString()}`, 460, yPosition, { width: 80, align: 'right' });
+        
+        const footerY = 750;
+        doc.fontSize(8).fillColor('#999999').text('Thank you for shopping at GETEDIL!', 50, footerY, { align: 'center', width: 495 }).text('For questions about this invoice, please contact support@getedil.com', 50, footerY + 15, { align: 'center', width: 495 });
+        
+        doc.end();
+        
+    } catch (error) {
+        console.error('PDF generation error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ==================== PUSH NOTIFICATIONS (DISABLED - ADD VAPID KEYS TO ENABLE) ====================
+const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
+const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
+
+if (vapidPublicKey && vapidPrivateKey && vapidPublicKey !== 'your-public-key' && vapidPrivateKey !== 'your-private-key') {
+    webpush.setVapidDetails(
+        'mailto:notifications@getedil.com',
+        vapidPublicKey,
+        vapidPrivateKey
+    );
+    console.log('🔔 Push notifications enabled');
+    
+    // Push notification subscription endpoints
+    app.post('/api/push/subscribe', async (req, res) => {
+        const token = req.headers.authorization?.split(' ')[1];
+        if (!token) return res.status(401).json({ error: 'Not authenticated' });
+        
+        try {
+            const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+            if (authError) throw authError;
+            
+            const subscription = req.body;
+            
+            await supabase
+                .from('push_subscriptions')
+                .upsert({
+                    user_id: user.id,
+                    endpoint: subscription.endpoint,
+                    keys: subscription.keys,
+                    created_at: new Date()
+                });
+            
+            res.json({ success: true });
+        } catch (error) {
+            console.error('Push subscription error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    });
+    
+    app.post('/api/push/unsubscribe', async (req, res) => {
+        const token = req.headers.authorization?.split(' ')[1];
+        if (!token) return res.status(401).json({ error: 'Not authenticated' });
+        
+        try {
+            const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+            if (authError) throw authError;
+            
+            const { endpoint } = req.body;
+            
+            await supabase
+                .from('push_subscriptions')
+                .delete()
+                .eq('user_id', user.id)
+                .eq('endpoint', endpoint);
+            
+            res.json({ success: true });
+        } catch (error) {
+            console.error('Push unsubscribe error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    });
+} else {
+    console.log('⚠️ Push notifications disabled: VAPID keys not configured');
+}
+
+// ==================== SOCIAL LOGIN (DISABLED - ADD KEYS TO ENABLE) ====================
+console.log('🔐 Social login disabled. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable');
+
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    passport.use(new GoogleStrategy({
+        clientID: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        callbackURL: `${process.env.API_URL}/api/auth/google/callback`
+    },
+    async (accessToken, refreshToken, profile, done) => {
+        try {
+            let user = await supabase
+                .from('users')
+                .select('*')
+                .eq('email', profile.emails[0].value)
+                .single();
+            
+            if (!user.data) {
+                const { data: newUser, error } = await supabase
+                    .from('users')
+                    .insert({
+                        email: profile.emails[0].value,
+                        full_name: profile.displayName,
+                        role: 'user',
+                        email_verified: true,
+                        trust_score: 100
+                    })
+                    .select()
+                    .single();
+                
+                if (error) throw error;
+                user = newUser;
+            }
+            
+            return done(null, user);
+        } catch (error) {
+            return done(error, null);
+        }
+    }));
+    
+    app.get('/api/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+    app.get('/api/auth/google/callback', passport.authenticate('google', { failureRedirect: '/login' }), (req, res) => {
+        res.redirect('https://getedil.vercel.app');
+    });
+    console.log('✅ Google OAuth enabled');
+} else {
+    console.log('⚠️ Google OAuth disabled - missing credentials');
+}
+
 // ==================== EMAIL FUNCTIONS ====================
 
 app.post('/api/email/order-confirmation', async (req, res) => {
@@ -1374,9 +1453,7 @@ app.post('/api/email/order-confirmation', async (req, res) => {
     
     const itemsHtml = items.map(item => `
         <tr>
-            <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.name}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">${item.quantity}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right;">₿ ${item.price}</td>
+            <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.name}${item.quantity > 1 ? ` x ${item.quantity}` : ''}</td>
             <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right;">₿ ${(item.price * item.quantity).toLocaleString()}</td>
         </tr>
     `).join('');
@@ -1417,7 +1494,7 @@ app.post('/api/email/order-confirmation', async (req, res) => {
                     <h3>Order Summary</h3>
                     <table border="1">
                         <thead>
-                            <tr><th>Product</th><th>Quantity</th><th>Unit Price</th><th>Total</th></tr>
+                            <tr><th>Item</th><th>Total</th> </tr>
                         </thead>
                         <tbody>
                             ${itemsHtml}
@@ -1513,707 +1590,6 @@ app.post('/api/email/contact', async (req, res) => {
     }
 });
 
-// ==================== PDF INVOICE ENDPOINT ====================
-
-app.get('/api/orders/:id/invoice', async (req, res) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-        return res.status(401).json({ error: 'Not authenticated' });
-    }
-    
-    try {
-        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-        if (authError) throw authError;
-        
-        const { id } = req.params;
-        
-        // Get order details
-        const { data: order, error: orderError } = await supabase
-            .from('orders')
-            .select('*')
-            .eq('id', id)
-            .eq('user_id', user.id)
-            .single();
-        
-        if (orderError || !order) {
-            return res.status(404).json({ error: 'Order not found' });
-        }
-        
-        // Get order items
-        const { data: items, error: itemsError } = await supabase
-            .from('order_items')
-            .select('*')
-            .eq('order_id', id);
-        
-        if (itemsError) throw itemsError;
-        
-        // Get user profile
-        const { data: profile } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', user.id)
-            .single();
-        
-        // Create PDF
-        const doc = new PDFDocument({ margin: 50, size: 'A4' });
-        
-        // Set response headers
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=invoice_${order.order_number}.pdf`);
-        
-        doc.pipe(res);
-        
-        // Header with Logo
-        doc.fontSize(24)
-           .font('Helvetica-Bold')
-           .fillColor('#0B4F2E')
-           .text('GETEDIL', { align: 'center' });
-        doc.fontSize(12)
-           .font('Helvetica')
-           .fillColor('#666666')
-           .text('Ethiopia\'s Digital Ecosystem', { align: 'center' });
-        doc.moveDown();
-        
-        // Invoice Title
-        doc.fontSize(20)
-           .font('Helvetica-Bold')
-           .fillColor('#000000')
-           .text('INVOICE', { align: 'center' });
-        doc.moveDown();
-        
-        // Invoice Details
-        doc.fontSize(10)
-           .font('Helvetica')
-           .fillColor('#333333');
-        
-        // Left Column - Order Info
-        doc.text(`Invoice Number: INV-${order.order_number}`, 50, 150);
-        doc.text(`Order Date: ${new Date(order.created_at).toLocaleDateString()}`, 50, 165);
-        doc.text(`Order Status: ${order.status.toUpperCase()}`, 50, 180);
-        
-        // Right Column - Customer Info
-        doc.text(`Bill To:`, 350, 150);
-        doc.text(`${profile?.full_name || 'Customer'}`, 350, 165);
-        doc.text(`${profile?.email || ''}`, 350, 180);
-        if (profile?.phone) doc.text(`${profile.phone}`, 350, 195);
-        
-        // Shipping Address
-        if (order.shipping_address) {
-            const addr = order.shipping_address;
-            doc.text(`Ship To:`, 350, 225);
-            doc.text(`${addr.full_name || ''}`, 350, 240);
-            doc.text(`${addr.address || ''}`, 350, 255);
-            doc.text(`${addr.city || ''}, ${addr.country || 'Ethiopia'}`, 350, 270);
-        }
-        
-        doc.moveDown(2);
-        
-        // Items Table Header
-        let yPosition = 320;
-        doc.font('Helvetica-Bold')
-           .fillColor('#0B4F2E')
-           .rect(50, yPosition - 5, 495, 25)
-           .fill('#F0FDF4');
-        doc.fillColor('#0B4F2E')
-           .text('Product', 60, yPosition)
-           .text('Quantity', 300, yPosition, { width: 80, align: 'center' })
-           .text('Unit Price', 380, yPosition, { width: 80, align: 'center' })
-           .text('Total', 460, yPosition, { width: 80, align: 'center' });
-        
-        yPosition += 25;
-        
-        // Items Table Rows
-        doc.font('Helvetica')
-           .fillColor('#333333');
-        
-        let subtotal = 0;
-        items.forEach((item, index) => {
-            const total = item.price * item.quantity;
-            subtotal += total;
-            
-            // Truncate long product names
-            const productName = item.product_name.length > 40 
-                ? item.product_name.substring(0, 37) + '...' 
-                : item.product_name;
-            
-            doc.text(productName, 60, yPosition, { width: 230 })
-               .text(item.quantity.toString(), 300, yPosition, { width: 80, align: 'center' })
-               .text(`₿ ${item.price.toLocaleString()}`, 380, yPosition, { width: 80, align: 'center' })
-               .text(`₿ ${total.toLocaleString()}`, 460, yPosition, { width: 80, align: 'center' });
-            yPosition += 20;
-            
-            // Add new page if needed
-            if (yPosition > 700 && index < items.length - 1) {
-                doc.addPage();
-                yPosition = 50;
-            }
-        });
-        
-        // Totals Section
-        yPosition += 20;
-        doc.font('Helvetica-Bold');
-        doc.text('Subtotal:', 380, yPosition, { width: 80, align: 'right' })
-           .text(`₿ ${subtotal.toLocaleString()}`, 460, yPosition, { width: 80, align: 'right' });
-        yPosition += 20;
-        
-        // Discount if applied
-        const discount = order.discount_amount || 0;
-        if (discount > 0) {
-            doc.fillColor('#10B981')
-               .text('Discount:', 380, yPosition, { width: 80, align: 'right' })
-               .text(`- ₿ ${discount.toLocaleString()}`, 460, yPosition, { width: 80, align: 'right' });
-            yPosition += 20;
-        }
-        
-        // Total
-        const total = order.total_amount;
-        doc.fillColor('#0B4F2E')
-           .font('Helvetica-Bold')
-           .fontSize(12)
-           .text('Total:', 380, yPosition, { width: 80, align: 'right' })
-           .text(`₿ ${total.toLocaleString()}`, 460, yPosition, { width: 80, align: 'right' });
-        
-        // Footer
-        const footerY = 750;
-        doc.fontSize(8)
-           .fillColor('#999999')
-           .text('Thank you for shopping at GETEDIL!', 50, footerY, { align: 'center', width: 495 })
-           .text('For questions about this invoice, please contact support@getedil.com', 50, footerY + 15, { align: 'center', width: 495 });
-        
-        // Finalize PDF
-        doc.end();
-        
-    } catch (error) {
-        console.error('PDF generation error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// ==================== NEWSLETTER ENDPOINTS ====================
-
-// Subscribe to newsletter
-app.post('/api/newsletter/subscribe', async (req, res) => {
-    const { email, name, preferences } = req.body;
-    
-    if (!email) {
-        return res.status(400).json({ error: 'Email is required' });
-    }
-    
-    try {
-        // Check if already subscribed
-        const { data: existing } = await supabase
-            .from('newsletter_subscribers')
-            .select('id, status')
-            .eq('email', email)
-            .single();
-        
-        if (existing) {
-            if (existing.status === 'active') {
-                return res.status(400).json({ error: 'Email already subscribed' });
-            } else {
-                // Reactivate
-                const { error: updateError } = await supabase
-                    .from('newsletter_subscribers')
-                    .update({ 
-                        status: 'active',
-                        subscribed_at: new Date(),
-                        preferences: preferences || { promotions: true, new_products: true, updates: true }
-                    })
-                    .eq('id', existing.id);
-                
-                if (updateError) throw updateError;
-                return res.json({ success: true, message: 'Subscription reactivated!' });
-            }
-        }
-        
-        // Generate tokens
-        const verificationToken = crypto.randomBytes(32).toString('hex');
-        const unsubscribeToken = crypto.randomBytes(32).toString('hex');
-        
-        // Insert new subscriber
-        const { data, error } = await supabase
-            .from('newsletter_subscribers')
-            .insert({
-                email,
-                name: name || null,
-                verification_token: verificationToken,
-                unsubscribe_token: unsubscribeToken,
-                preferences: preferences || { promotions: true, new_products: true, updates: true }
-            })
-            .select()
-            .single();
-        
-        if (error) throw error;
-        
-        // Send verification email
-        await sendNewsletterVerificationEmail(email, name, verificationToken);
-        
-        res.json({ 
-            success: true, 
-            message: 'Please check your email to verify your subscription.',
-            subscriber_id: data.id
-        });
-        
-    } catch (error) {
-        console.error('Newsletter subscription error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Verify newsletter subscription
-app.get('/api/newsletter/verify', async (req, res) => {
-    const { token } = req.query;
-    
-    if (!token) {
-        return res.status(400).json({ error: 'Verification token required' });
-    }
-    
-    try {
-        const { data, error } = await supabase
-            .from('newsletter_subscribers')
-            .update({ verified: true, status: 'active' })
-            .eq('verification_token', token)
-            .eq('verified', false)
-            .select()
-            .single();
-        
-        if (error || !data) {
-            return res.status(400).json({ error: 'Invalid or expired verification token' });
-        }
-        
-        res.redirect('https://getedil.vercel.app/newsletter/verified');
-        
-    } catch (error) {
-        console.error('Newsletter verification error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Unsubscribe from newsletter
-app.post('/api/newsletter/unsubscribe', async (req, res) => {
-    const { email, token } = req.body;
-    
-    try {
-        let query = supabase.from('newsletter_subscribers').update({ status: 'unsubscribed' });
-        
-        if (token) {
-            query = query.eq('unsubscribe_token', token);
-        } else if (email) {
-            query = query.eq('email', email);
-        } else {
-            return res.status(400).json({ error: 'Email or token required' });
-        }
-        
-        const { error } = await query;
-        
-        if (error) throw error;
-        
-        res.json({ success: true, message: 'Successfully unsubscribed' });
-        
-    } catch (error) {
-        console.error('Unsubscribe error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Send newsletter campaign (admin only)
-app.post('/api/newsletter/send', async (req, res) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-        return res.status(401).json({ error: 'Not authenticated' });
-    }
-    
-    try {
-        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-        if (authError) throw authError;
-        
-        // Check if user is admin
-        const { data: profile } = await supabase
-            .from('users')
-            .select('role')
-            .eq('id', user.id)
-            .single();
-        
-        if (profile?.role !== 'admin') {
-            return res.status(403).json({ error: 'Admin access required' });
-        }
-        
-        const { subject, content, preferences } = req.body;
-        
-        if (!subject || !content) {
-            return res.status(400).json({ error: 'Subject and content required' });
-        }
-        
-        // Get subscribers
-        let query = supabase
-            .from('newsletter_subscribers')
-            .select('email, name, preferences')
-            .eq('status', 'active')
-            .eq('verified', true);
-        
-        if (preferences) {
-            // Filter by preferences
-            query = query.contains('preferences', preferences);
-        }
-        
-        const { data: subscribers, error: subError } = await query;
-        
-        if (subError) throw subError;
-        
-        // Create campaign record
-        const { data: campaign, error: campaignError } = await supabase
-            .from('newsletter_campaigns')
-            .insert({
-                subject,
-                content,
-                recipient_count: subscribers.length,
-                status: 'sending'
-            })
-            .select()
-            .single();
-        
-        if (campaignError) throw campaignError;
-        
-        // Send emails (batch send)
-        let sentCount = 0;
-        for (const subscriber of subscribers) {
-            try {
-                await sendNewsletterEmail(subscriber.email, subscriber.name, subject, content, campaign.id);
-                sentCount++;
-                
-                // Log sent
-                await supabase
-                    .from('newsletter_sent_log')
-                    .insert({
-                        campaign_id: campaign.id,
-                        subscriber_id: subscriber.id,
-                        sent_at: new Date()
-                    });
-            } catch (emailError) {
-                console.error(`Failed to send to ${subscriber.email}:`, emailError);
-            }
-        }
-        
-        // Update campaign status
-        await supabase
-            .from('newsletter_campaigns')
-            .update({ 
-                status: 'sent', 
-                sent_at: new Date(),
-                recipient_count: sentCount
-            })
-            .eq('id', campaign.id);
-        
-        res.json({ 
-            success: true, 
-            message: `Newsletter sent to ${sentCount} subscribers`,
-            campaign_id: campaign.id
-        });
-        
-    } catch (error) {
-        console.error('Send newsletter error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Get newsletter stats (admin only)
-app.get('/api/newsletter/stats', async (req, res) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-        return res.status(401).json({ error: 'Not authenticated' });
-    }
-    
-    try {
-        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-        if (authError) throw authError;
-        
-        // Check admin
-        const { data: profile } = await supabase
-            .from('users')
-            .select('role')
-            .eq('id', user.id)
-            .single();
-        
-        if (profile?.role !== 'admin') {
-            return res.status(403).json({ error: 'Admin access required' });
-        }
-        
-        // Get stats
-        const [totalSubscribers, verifiedSubscribers, recentCampaigns] = await Promise.all([
-            supabase.from('newsletter_subscribers').select('id', { count: 'exact', head: true }),
-            supabase.from('newsletter_subscribers').select('id', { count: 'exact', head: true }).eq('verified', true),
-            supabase.from('newsletter_campaigns').select('*').order('created_at', { ascending: false }).limit(5)
-        ]);
-        
-        res.json({
-            total_subscribers: totalSubscribers.count,
-            verified_subscribers: verifiedSubscribers.count,
-            recent_campaigns: recentCampaigns.data
-        });
-        
-    } catch (error) {
-        console.error('Newsletter stats error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Add to server.js
-
-// ==================== PUSH NOTIFICATION ENDPOINTS ====================
-// Push notifications - only enable if VAPID keys are set
-const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
-const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
-
-if (vapidPublicKey && vapidPrivateKey && vapidPublicKey !== 'your-public-key' && vapidPrivateKey !== 'your-private-key') {
-    webpush.setVapidDetails(
-        'mailto:notifications@getedil.com',
-        vapidPublicKey,
-        vapidPrivateKey
-    );
-    console.log('🔔 Push notifications enabled');
-} else {
-    console.log('⚠️ Push notifications disabled: VAPID keys not configured');
-}
-
-// Subscribe to push notifications
-app.post('/api/push/subscribe', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  
-  try {
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError) throw authError;
-    
-    const subscription = req.body;
-    
-    const { error } = await supabase
-      .from('push_subscriptions')
-      .upsert({
-        user_id: user.id,
-        endpoint: subscription.endpoint,
-        keys: subscription.keys,
-        created_at: new Date()
-      });
-    
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Push subscription error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Unsubscribe from push notifications
-app.post('/api/push/unsubscribe', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  
-  try {
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError) throw authError;
-    
-    const { endpoint } = req.body;
-    
-    const { error } = await supabase
-      .from('push_subscriptions')
-      .delete()
-      .eq('user_id', user.id)
-      .eq('endpoint', endpoint);
-    
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Push unsubscribe error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Send push notification to user
-async function sendPushNotification(userId, title, body, url) {
-  try {
-    const { data: subscriptions } = await supabase
-      .from('push_subscriptions')
-      .select('*')
-      .eq('user_id', userId);
-    
-    if (!subscriptions || subscriptions.length === 0) return;
-    
-    const payload = JSON.stringify({ title, body, url });
-    
-    for (const sub of subscriptions) {
-      try {
-        await webpush.sendNotification(
-          {
-            endpoint: sub.endpoint,
-            keys: sub.keys
-          },
-          payload
-        );
-      } catch (error) {
-        if (error.statusCode === 410) {
-          // Subscription expired
-          await supabase.from('push_subscriptions').delete().eq('id', sub.id);
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Send push notification error:', error);
-  }
-}
-
-// Add to server.js - Social Authentication
-
-// Google OAuth
-passport.use(new GoogleStrategy({
-    clientID: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: `${process.env.API_URL}/api/auth/google/callback`
-  },
-  async (accessToken, refreshToken, profile, done) => {
-    try {
-      let user = await supabase
-        .from('users')
-        .select('*')
-        .eq('email', profile.emails[0].value)
-        .single();
-      
-      if (!user.data) {
-        // Create new user
-        const { data: newUser, error } = await supabase
-          .from('users')
-          .insert({
-            email: profile.emails[0].value,
-            full_name: profile.displayName,
-            role: 'user',
-            email_verified: true,
-            trust_score: 100
-          })
-          .select()
-          .single();
-        
-        if (error) throw error;
-        user = newUser;
-      }
-      
-      return done(null, user);
-    } catch (error) {
-      return done(error, null);
-    }
-  }
-));
-
-// Facebook OAuth
-passport.use(new FacebookStrategy({
-    clientID: process.env.FACEBOOK_APP_ID,
-    clientSecret: process.env.FACEBOOK_APP_SECRET,
-    callbackURL: `${process.env.API_URL}/api/auth/facebook/callback`,
-    profileFields: ['id', 'displayName', 'emails']
-  },
-  async (accessToken, refreshToken, profile, done) => {
-    // Similar to Google implementation
-  }
-));
-
-// Auth routes
-app.get('/api/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
-app.get('/api/auth/google/callback', passport.authenticate('google', { failureRedirect: '/login' }), (req, res) => {
-  res.redirect('https://getedil.vercel.app');
-});
-
-app.get('/api/auth/facebook', passport.authenticate('facebook', { scope: ['email'] }));
-app.get('/api/auth/facebook/callback', passport.authenticate('facebook', { failureRedirect: '/login' }), (req, res) => {
-  res.redirect('https://getedil.vercel.app');
-});
-
-// Add to server.js - Affiliate Endpoints
-
-// Generate referral code
-app.get('/api/affiliate/code', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  
-  try {
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError) throw authError;
-    
-    let { data: profile } = await supabase
-      .from('users')
-      .select('referral_code')
-      .eq('id', user.id)
-      .single();
-    
-    if (!profile.referral_code) {
-      const code = generateReferralCode();
-      await supabase
-        .from('users')
-        .update({ referral_code: code })
-        .eq('id', user.id);
-      
-      return res.json({ code });
-    }
-    
-    res.json({ code: profile.referral_code });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get affiliate stats
-app.get('/api/affiliate/stats', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  
-  try {
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError) throw authError;
-    
-    const { data: referrals } = await supabase
-      .from('affiliate_referrals')
-      .select('*')
-      .eq('referrer_id', user.id);
-    
-    const totalEarnings = referrals.reduce((sum, r) => sum + r.commission, 0);
-    const pendingPayout = referrals.filter(r => r.status === 'pending').reduce((sum, r) => sum + r.commission, 0);
-    
-    res.json({
-      referrals: referrals.length,
-      earnings: totalEarnings,
-      pending_payout: pendingPayout,
-      commission_rate: calculateCommissionRate(referrals.length)
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-function generateReferralCode() {
-  return Math.random().toString(36).substring(2, 10).toUpperCase();
-}
-
-function calculateCommissionRate(referrals) {
-  if (referrals >= 500) return 15;
-  if (referrals >= 200) return 12;
-  if (referrals >= 50) return 10;
-  if (referrals >= 10) return 7;
-  if (referrals >= 1) return 5;
-  return 0;
-}
-
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
@@ -2223,6 +1599,7 @@ app.listen(PORT, () => {
     console.log(`🎟️ Coupon system enabled`);
     console.log(`📊 Seller analytics enabled`);
     console.log(`📤 Bulk upload enabled`);
+    console.log(`📄 PDF invoice enabled`);
 });
 
 module.exports = app;
