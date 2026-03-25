@@ -630,6 +630,63 @@ app.put('/api/user/profile', async (req, res) => {
     }
 });
 
+// Add to server.js
+
+// Create price alert
+app.post('/api/price-alerts', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError) throw authError;
+    
+    const { product_id, target_price, current_price } = req.body;
+    
+    const { error } = await supabase
+      .from('price_alerts')
+      .insert({
+        user_id: user.id,
+        product_id,
+        target_price,
+        current_price
+      });
+    
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Price alert error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Check price drops (run as cron job)
+async function checkPriceDrops() {
+  const { data: alerts } = await supabase
+    .from('price_alerts')
+    .select('*, products:digital_products(*)')
+    .eq('triggered', false);
+  
+  for (const alert of alerts) {
+    if (alert.products.price <= alert.target_price) {
+      // Send notification
+      await sendPushNotification(alert.user_id, 'Price Drop Alert!', `${alert.products.name} is now ₿ ${alert.products.price}`, `/products/${alert.product_id}`);
+      
+      // Send email
+      await sendPriceDropEmail(alert.user_id, alert.products);
+      
+      // Mark as triggered
+      await supabase
+        .from('price_alerts')
+        .update({ triggered: true })
+        .eq('id', alert.id);
+    }
+  }
+}
+
 // ==================== PRODUCTS ENDPOINTS ====================
 
 app.get('/api/products', async (req, res) => {
