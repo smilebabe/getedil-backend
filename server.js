@@ -1898,6 +1898,109 @@ app.get('/api/newsletter/stats', async (req, res) => {
     }
 });
 
+// Add to server.js
+
+// ==================== PUSH NOTIFICATION ENDPOINTS ====================
+const webpush = require('web-push');
+
+webpush.setVapidDetails(
+  'mailto:notifications@getedil.com',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
+
+// Subscribe to push notifications
+app.post('/api/push/subscribe', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError) throw authError;
+    
+    const subscription = req.body;
+    
+    const { error } = await supabase
+      .from('push_subscriptions')
+      .upsert({
+        user_id: user.id,
+        endpoint: subscription.endpoint,
+        keys: subscription.keys,
+        created_at: new Date()
+      });
+    
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Push subscription error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Unsubscribe from push notifications
+app.post('/api/push/unsubscribe', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError) throw authError;
+    
+    const { endpoint } = req.body;
+    
+    const { error } = await supabase
+      .from('push_subscriptions')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('endpoint', endpoint);
+    
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Push unsubscribe error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send push notification to user
+async function sendPushNotification(userId, title, body, url) {
+  try {
+    const { data: subscriptions } = await supabase
+      .from('push_subscriptions')
+      .select('*')
+      .eq('user_id', userId);
+    
+    if (!subscriptions || subscriptions.length === 0) return;
+    
+    const payload = JSON.stringify({ title, body, url });
+    
+    for (const sub of subscriptions) {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: sub.keys
+          },
+          payload
+        );
+      } catch (error) {
+        if (error.statusCode === 410) {
+          // Subscription expired
+          await supabase.from('push_subscriptions').delete().eq('id', sub.id);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Send push notification error:', error);
+  }
+}
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
