@@ -2126,6 +2126,86 @@ app.get('/api/auth/facebook/callback', passport.authenticate('facebook', { failu
   res.redirect('https://getedil.vercel.app');
 });
 
+// Add to server.js - Affiliate Endpoints
+
+// Generate referral code
+app.get('/api/affiliate/code', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError) throw authError;
+    
+    let { data: profile } = await supabase
+      .from('users')
+      .select('referral_code')
+      .eq('id', user.id)
+      .single();
+    
+    if (!profile.referral_code) {
+      const code = generateReferralCode();
+      await supabase
+        .from('users')
+        .update({ referral_code: code })
+        .eq('id', user.id);
+      
+      return res.json({ code });
+    }
+    
+    res.json({ code: profile.referral_code });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get affiliate stats
+app.get('/api/affiliate/stats', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError) throw authError;
+    
+    const { data: referrals } = await supabase
+      .from('affiliate_referrals')
+      .select('*')
+      .eq('referrer_id', user.id);
+    
+    const totalEarnings = referrals.reduce((sum, r) => sum + r.commission, 0);
+    const pendingPayout = referrals.filter(r => r.status === 'pending').reduce((sum, r) => sum + r.commission, 0);
+    
+    res.json({
+      referrals: referrals.length,
+      earnings: totalEarnings,
+      pending_payout: pendingPayout,
+      commission_rate: calculateCommissionRate(referrals.length)
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+function generateReferralCode() {
+  return Math.random().toString(36).substring(2, 10).toUpperCase();
+}
+
+function calculateCommissionRate(referrals) {
+  if (referrals >= 500) return 15;
+  if (referrals >= 200) return 12;
+  if (referrals >= 50) return 10;
+  if (referrals >= 10) return 7;
+  if (referrals >= 1) return 5;
+  return 0;
+}
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
