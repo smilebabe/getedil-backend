@@ -924,16 +924,17 @@ app.post('/api/orders', async (req, res) => {
         const orderNumber = 'ORD-' + Date.now();
         
         const { data: order, error: orderError } = await supabase
-            .from('orders')
-            .insert({
-                order_number: orderNumber,
-                user_id: user.id,
-                total_amount,
-                status: 'pending',
-                shipping_address
-            })
-            .select()
-            .single();
+    .from('orders')
+    .insert({
+        order_number: orderNumber,
+        user_id: user.id,
+        total_amount,
+        discount_amount: discount_amount || 0,
+        status: 'pending',
+        shipping_address
+    })
+    .select()
+    .single();
         
         if (orderError) {
             return res.status(500).json({ error: orderError.message });
