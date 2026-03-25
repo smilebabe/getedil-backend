@@ -1963,12 +1963,20 @@ app.get('/api/newsletter/stats', async (req, res) => {
 // Add to server.js
 
 // ==================== PUSH NOTIFICATION ENDPOINTS ====================
+// Push notifications - only enable if VAPID keys are set
+const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
+const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 
-webpush.setVapidDetails(
-  'mailto:bilucute08@gmail.com',
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
+if (vapidPublicKey && vapidPrivateKey && vapidPublicKey !== 'your-public-key' && vapidPrivateKey !== 'your-private-key') {
+    webpush.setVapidDetails(
+        'mailto:notifications@getedil.com',
+        vapidPublicKey,
+        vapidPrivateKey
+    );
+    console.log('🔔 Push notifications enabled');
+} else {
+    console.log('⚠️ Push notifications disabled: VAPID keys not configured');
+}
 
 // Subscribe to push notifications
 app.post('/api/push/subscribe', async (req, res) => {
