@@ -150,6 +150,102 @@ async function sendPasswordResetEmail(email, name, token) {
     });
 }
 
+// Send newsletter verification email
+async function sendNewsletterVerificationEmail(email, name, token) {
+    const verificationLink = `https://getedil.vercel.app/api/newsletter/verify?token=${token}`;
+    
+    const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Verify Your Newsletter Subscription - GETEDIL</title>
+            <style>
+                body { font-family: Arial, sans-serif; background-color: #f5f5f5; margin: 0; padding: 0; }
+                .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; }
+                .header { background: linear-gradient(135deg, #0B4F2E, #D4AF37); padding: 30px; text-align: center; color: white; }
+                .content { padding: 30px; }
+                .button { display: inline-block; background-color: #0B4F2E; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin-top: 20px; }
+                .footer { background-color: #f5f5f5; padding: 20px; text-align: center; color: #666; font-size: 12px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🏗️ GETEDIL</h1>
+                </div>
+                <div class="content">
+                    <h2>Confirm Your Subscription</h2>
+                    <p>Hello ${name || 'there'},</p>
+                    <p>Thank you for subscribing to the GETEDIL newsletter! You'll receive updates about new products, promotions, and platform news.</p>
+                    <div style="text-align: center;">
+                        <a href="${verificationLink}" class="button">Confirm Subscription</a>
+                    </div>
+                    <p style="margin-top: 20px; color: #666; font-size: 12px;">If you didn't subscribe to our newsletter, you can ignore this email.</p>
+                </div>
+                <div class="footer">
+                    <p>© 2026 GETEDIL - Ethiopia's Digital Ecosystem</p>
+                </div>
+            </div>
+        </body>
+        </html>
+    `;
+    
+    await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: 'Confirm Your GETEDIL Newsletter Subscription',
+        html
+    });
+}
+
+// Send newsletter email
+async function sendNewsletterEmail(email, name, subject, content, campaignId) {
+    const unsubscribeLink = `https://getedil.vercel.app/newsletter/unsubscribe?email=${encodeURIComponent(email)}`;
+    
+    const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>${subject}</title>
+            <style>
+                body { font-family: Arial, sans-serif; background-color: #f5f5f5; margin: 0; padding: 0; }
+                .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; }
+                .header { background: linear-gradient(135deg, #0B4F2E, #D4AF37); padding: 20px; text-align: center; color: white; }
+                .content { padding: 30px; line-height: 1.6; }
+                .footer { background-color: #f5f5f5; padding: 20px; text-align: center; color: #666; font-size: 12px; }
+                .unsubscribe { color: #666; text-decoration: underline; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🏗️ GETEDIL</h1>
+                </div>
+                <div class="content">
+                    <h2>Hello ${name || 'there'}!</h2>
+                    ${content}
+                </div>
+                <div class="footer">
+                    <p>© 2026 GETEDIL - Ethiopia's Digital Ecosystem</p>
+                    <p>
+                        <a href="${unsubscribeLink}" class="unsubscribe">Unsubscribe</a> from future emails.
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+    `;
+    
+    await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: subject,
+        html
+    });
+}
+
 // ==================== HEALTH CHECK ====================
 app.get('/health', (req, res) => {
     res.json({ 
