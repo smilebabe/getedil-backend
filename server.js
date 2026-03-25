@@ -2064,10 +2064,6 @@ async function sendPushNotification(userId, title, body, url) {
 
 // Add to server.js - Social Authentication
 
-const passport = require('passport');
-const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const FacebookStrategy = require('passport-facebook').Strategy;
-
 // Google OAuth
 passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
