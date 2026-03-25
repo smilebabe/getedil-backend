@@ -1590,6 +1590,219 @@ app.post('/api/email/contact', async (req, res) => {
     }
 });
 
+// ==================== COURSE ENDPOINTS ====================
+
+// Get all courses
+app.get('/api/courses', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('courses')
+            .select('*')
+            .eq('status', 'published')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get single course
+app.get('/api/courses/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { data, error } = await supabase
+            .from('courses')
+            .select('*')
+            .eq('id', id)
+            .single();
+        
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get course lessons
+app.get('/api/courses/:id/lessons', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { data, error } = await supabase
+            .from('lessons')
+            .select('*')
+            .eq('course_id', id)
+            .order('lesson_order', { ascending: true });
+        
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Enroll in course
+app.post('/api/courses/:id/enroll', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        const { id } = req.params;
+        
+        // Check if already enrolled
+        const { data: existing } = await supabase
+            .from('course_progress')
+            .select('id')
+            .eq('user_id', user.id)
+            .eq('course_id', id)
+            .limit(1);
+        
+        if (existing && existing.length > 0) {
+            return res.status(400).json({ error: 'Already enrolled' });
+        }
+        
+        // Get all lessons for this course
+        const { data: lessons } = await supabase
+            .from('lessons')
+            .select('id')
+            .eq('course_id', id);
+        
+        // Enroll user in all lessons
+        for (const lesson of lessons) {
+            await supabase
+                .from('course_progress')
+                .insert({
+                    user_id: user.id,
+                    course_id: id,
+                    lesson_id: lesson.id,
+                    completed: false
+                });
+        }
+        
+        // Update enrolled count
+        await supabase
+            .from('courses')
+            .update({ enrolled_count: supabase.raw('enrolled_count + 1') })
+            .eq('id', id);
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Enrollment error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get course progress
+app.get('/api/courses/:id/progress', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        const { id } = req.params;
+        
+        const { data, error } = await supabase
+            .from('course_progress')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('course_id', id);
+        
+        if (error) throw error;
+        
+        const progress = {};
+        data.forEach(p => {
+            progress[p.lesson_id] = p.completed;
+        });
+        
+        res.json({
+            enrolled: data.length > 0,
+            progress,
+            completed: data.filter(p => p.completed).length,
+            total: data.length
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Update lesson progress
+app.post('/api/courses/:id/progress', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        const { id } = req.params;
+        const { lessonId, completed } = req.body;
+        
+        await supabase
+            .from('course_progress')
+            .update({ 
+                completed, 
+                completed_at: completed ? new Date() : null 
+            })
+            .eq('user_id', user.id)
+            .eq('course_id', id)
+            .eq('lesson_id', lessonId);
+        
+        // Check if course is completed
+        const { data: progress } = await supabase
+            .from('course_progress')
+            .select('completed')
+            .eq('user_id', user.id)
+            .eq('course_id', id);
+        
+        const allCompleted = progress.every(p => p.completed);
+        
+        if (allCompleted) {
+            // Generate certificate
+            const certNumber = `CERT-${Date.now()}-${user.id.slice(0, 8)}`;
+            const verifyCode = Math.random().toString(36).substring(2, 10).toUpperCase();
+            
+            const { data: course } = await supabase
+                .from('courses')
+                .select('title')
+                .eq('id', id)
+                .single();
+            
+            await supabase
+                .from('certificates')
+                .insert({
+                    certificate_number: certNumber,
+                    user_id: user.id,
+                    user_name: user.user_metadata?.full_name || 'User',
+                    course_id: id,
+                    course_title: course.title,
+                    verification_code: verifyCode
+                });
+            
+            res.json({ certificate: { number: certNumber, code: verifyCode } });
+        } else {
+            res.json({ success: true });
+        }
+    } catch (error) {
+        console.error('Progress update error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
