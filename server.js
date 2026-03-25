@@ -1963,7 +1963,6 @@ app.get('/api/newsletter/stats', async (req, res) => {
 // Add to server.js
 
 // ==================== PUSH NOTIFICATION ENDPOINTS ====================
-const webpush = require('web-push');
 
 webpush.setVapidDetails(
   'mailto:notifications@getedil.com',
