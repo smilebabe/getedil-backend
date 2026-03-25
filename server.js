@@ -1532,6 +1532,276 @@ app.get('/api/orders/:id/invoice', async (req, res) => {
     }
 });
 
+// ==================== NEWSLETTER ENDPOINTS ====================
+
+// Subscribe to newsletter
+app.post('/api/newsletter/subscribe', async (req, res) => {
+    const { email, name, preferences } = req.body;
+    
+    if (!email) {
+        return res.status(400).json({ error: 'Email is required' });
+    }
+    
+    try {
+        // Check if already subscribed
+        const { data: existing } = await supabase
+            .from('newsletter_subscribers')
+            .select('id, status')
+            .eq('email', email)
+            .single();
+        
+        if (existing) {
+            if (existing.status === 'active') {
+                return res.status(400).json({ error: 'Email already subscribed' });
+            } else {
+                // Reactivate
+                const { error: updateError } = await supabase
+                    .from('newsletter_subscribers')
+                    .update({ 
+                        status: 'active',
+                        subscribed_at: new Date(),
+                        preferences: preferences || { promotions: true, new_products: true, updates: true }
+                    })
+                    .eq('id', existing.id);
+                
+                if (updateError) throw updateError;
+                return res.json({ success: true, message: 'Subscription reactivated!' });
+            }
+        }
+        
+        // Generate tokens
+        const verificationToken = crypto.randomBytes(32).toString('hex');
+        const unsubscribeToken = crypto.randomBytes(32).toString('hex');
+        
+        // Insert new subscriber
+        const { data, error } = await supabase
+            .from('newsletter_subscribers')
+            .insert({
+                email,
+                name: name || null,
+                verification_token: verificationToken,
+                unsubscribe_token: unsubscribeToken,
+                preferences: preferences || { promotions: true, new_products: true, updates: true }
+            })
+            .select()
+            .single();
+        
+        if (error) throw error;
+        
+        // Send verification email
+        await sendNewsletterVerificationEmail(email, name, verificationToken);
+        
+        res.json({ 
+            success: true, 
+            message: 'Please check your email to verify your subscription.',
+            subscriber_id: data.id
+        });
+        
+    } catch (error) {
+        console.error('Newsletter subscription error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Verify newsletter subscription
+app.get('/api/newsletter/verify', async (req, res) => {
+    const { token } = req.query;
+    
+    if (!token) {
+        return res.status(400).json({ error: 'Verification token required' });
+    }
+    
+    try {
+        const { data, error } = await supabase
+            .from('newsletter_subscribers')
+            .update({ verified: true, status: 'active' })
+            .eq('verification_token', token)
+            .eq('verified', false)
+            .select()
+            .single();
+        
+        if (error || !data) {
+            return res.status(400).json({ error: 'Invalid or expired verification token' });
+        }
+        
+        res.redirect('https://getedil.vercel.app/newsletter/verified');
+        
+    } catch (error) {
+        console.error('Newsletter verification error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Unsubscribe from newsletter
+app.post('/api/newsletter/unsubscribe', async (req, res) => {
+    const { email, token } = req.body;
+    
+    try {
+        let query = supabase.from('newsletter_subscribers').update({ status: 'unsubscribed' });
+        
+        if (token) {
+            query = query.eq('unsubscribe_token', token);
+        } else if (email) {
+            query = query.eq('email', email);
+        } else {
+            return res.status(400).json({ error: 'Email or token required' });
+        }
+        
+        const { error } = await query;
+        
+        if (error) throw error;
+        
+        res.json({ success: true, message: 'Successfully unsubscribed' });
+        
+    } catch (error) {
+        console.error('Unsubscribe error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Send newsletter campaign (admin only)
+app.post('/api/newsletter/send', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        // Check if user is admin
+        const { data: profile } = await supabase
+            .from('users')
+            .select('role')
+            .eq('id', user.id)
+            .single();
+        
+        if (profile?.role !== 'admin') {
+            return res.status(403).json({ error: 'Admin access required' });
+        }
+        
+        const { subject, content, preferences } = req.body;
+        
+        if (!subject || !content) {
+            return res.status(400).json({ error: 'Subject and content required' });
+        }
+        
+        // Get subscribers
+        let query = supabase
+            .from('newsletter_subscribers')
+            .select('email, name, preferences')
+            .eq('status', 'active')
+            .eq('verified', true);
+        
+        if (preferences) {
+            // Filter by preferences
+            query = query.contains('preferences', preferences);
+        }
+        
+        const { data: subscribers, error: subError } = await query;
+        
+        if (subError) throw subError;
+        
+        // Create campaign record
+        const { data: campaign, error: campaignError } = await supabase
+            .from('newsletter_campaigns')
+            .insert({
+                subject,
+                content,
+                recipient_count: subscribers.length,
+                status: 'sending'
+            })
+            .select()
+            .single();
+        
+        if (campaignError) throw campaignError;
+        
+        // Send emails (batch send)
+        let sentCount = 0;
+        for (const subscriber of subscribers) {
+            try {
+                await sendNewsletterEmail(subscriber.email, subscriber.name, subject, content, campaign.id);
+                sentCount++;
+                
+                // Log sent
+                await supabase
+                    .from('newsletter_sent_log')
+                    .insert({
+                        campaign_id: campaign.id,
+                        subscriber_id: subscriber.id,
+                        sent_at: new Date()
+                    });
+            } catch (emailError) {
+                console.error(`Failed to send to ${subscriber.email}:`, emailError);
+            }
+        }
+        
+        // Update campaign status
+        await supabase
+            .from('newsletter_campaigns')
+            .update({ 
+                status: 'sent', 
+                sent_at: new Date(),
+                recipient_count: sentCount
+            })
+            .eq('id', campaign.id);
+        
+        res.json({ 
+            success: true, 
+            message: `Newsletter sent to ${sentCount} subscribers`,
+            campaign_id: campaign.id
+        });
+        
+    } catch (error) {
+        console.error('Send newsletter error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get newsletter stats (admin only)
+app.get('/api/newsletter/stats', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        // Check admin
+        const { data: profile } = await supabase
+            .from('users')
+            .select('role')
+            .eq('id', user.id)
+            .single();
+        
+        if (profile?.role !== 'admin') {
+            return res.status(403).json({ error: 'Admin access required' });
+        }
+        
+        // Get stats
+        const [totalSubscribers, verifiedSubscribers, recentCampaigns] = await Promise.all([
+            supabase.from('newsletter_subscribers').select('id', { count: 'exact', head: true }),
+            supabase.from('newsletter_subscribers').select('id', { count: 'exact', head: true }).eq('verified', true),
+            supabase.from('newsletter_campaigns').select('*').order('created_at', { ascending: false }).limit(5)
+        ]);
+        
+        res.json({
+            total_subscribers: totalSubscribers.count,
+            verified_subscribers: verifiedSubscribers.count,
+            recent_campaigns: recentCampaigns.data
+        });
+        
+    } catch (error) {
+        console.error('Newsletter stats error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
