@@ -1,4 +1,3 @@
-const webpush = require('web-push');
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
@@ -8,6 +7,11 @@ const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const csv = require('csv-parser');
 const stream = require('stream');
+const PDFDocument = require('pdfkit');
+const webpush = require('web-push');
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const FacebookStrategy = require('passport-facebook').Strategy;
 require('dotenv').config();
 
 const app = express();
