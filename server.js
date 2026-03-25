@@ -1356,7 +1356,6 @@ app.post('/api/email/contact', async (req, res) => {
 });
 
 // ==================== PDF INVOICE ENDPOINT ====================
-const PDFDocument = require('pdfkit');
 
 app.get('/api/orders/:id/invoice', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
@@ -1475,7 +1474,12 @@ app.get('/api/orders/:id/invoice', async (req, res) => {
             const total = item.price * item.quantity;
             subtotal += total;
             
-            doc.text(item.product_name, 60, yPosition, { width: 230 })
+            // Truncate long product names
+            const productName = item.product_name.length > 40 
+                ? item.product_name.substring(0, 37) + '...' 
+                : item.product_name;
+            
+            doc.text(productName, 60, yPosition, { width: 230 })
                .text(item.quantity.toString(), 300, yPosition, { width: 80, align: 'center' })
                .text(`₿ ${item.price.toLocaleString()}`, 380, yPosition, { width: 80, align: 'center' })
                .text(`₿ ${total.toLocaleString()}`, 460, yPosition, { width: 80, align: 'center' });
