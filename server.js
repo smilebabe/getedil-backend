@@ -1107,10 +1107,10 @@ app.get('/api/seller/analytics', async (req, res) => {
 });
 
 // ==================== BULK UPLOAD ENDPOINT ====================
-const multer = require('multer');
 const csv = require('csv-parser');
 const stream = require('stream');
 
+// csvUpload uses the existing multer variable declared at the top
 const csvUpload = multer({ storage: multer.memoryStorage() });
 
 app.post('/api/seller/bulk-upload', csvUpload.single('file'), async (req, res) => {
@@ -1137,21 +1137,20 @@ app.post('/api/seller/bulk-upload', csvUpload.single('file'), async (req, res) =
         readableStream.push(csvBuffer);
         readableStream.push(null);
         
+        const validCategories = ['documents', 'graphics', 'software', 'audio', 'video', 'ebooks', 'photos', '3d'];
+        
         await new Promise((resolve) => {
             readableStream
                 .pipe(csv())
                 .on('data', async (row) => {
                     const { name, description, price, is_free, category, file_format } = row;
                     
-                    // Validate required fields
                     if (!name) {
                         errors.push(`Missing name in row: ${JSON.stringify(row)}`);
                         return;
                     }
                     
-                    // Validate category
-                    const validCategories = ['documents', 'graphics', 'software', 'audio', 'video', 'ebooks', 'photos', '3d'];
-                    if (!validCategories.includes(category)) {
+                    if (category && !validCategories.includes(category)) {
                         errors.push(`Invalid category "${category}" for product "${name}". Valid: ${validCategories.join(', ')}`);
                         return;
                     }
@@ -1195,7 +1194,7 @@ app.post('/api/seller/bulk-upload', csvUpload.single('file'), async (req, res) =
             total: results.length + errors.length,
             successCount,
             failedCount: errors.length,
-            errors: errors.slice(0, 20) // Limit errors to 20
+            errors: errors.slice(0, 20)
         });
         
     } catch (error) {
@@ -1203,7 +1202,6 @@ app.post('/api/seller/bulk-upload', csvUpload.single('file'), async (req, res) =
         res.status(500).json({ error: error.message });
     }
 });
-
 // ==================== EMAIL FUNCTIONS ====================
 
 app.post('/api/email/order-confirmation', async (req, res) => {
