@@ -2001,6 +2001,74 @@ async function sendPushNotification(userId, title, body, url) {
   }
 }
 
+// Add to server.js - Social Authentication
+
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const FacebookStrategy = require('passport-facebook').Strategy;
+
+// Google OAuth
+passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: `${process.env.API_URL}/api/auth/google/callback`
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    try {
+      let user = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', profile.emails[0].value)
+        .single();
+      
+      if (!user.data) {
+        // Create new user
+        const { data: newUser, error } = await supabase
+          .from('users')
+          .insert({
+            email: profile.emails[0].value,
+            full_name: profile.displayName,
+            role: 'user',
+            email_verified: true,
+            trust_score: 100
+          })
+          .select()
+          .single();
+        
+        if (error) throw error;
+        user = newUser;
+      }
+      
+      return done(null, user);
+    } catch (error) {
+      return done(error, null);
+    }
+  }
+));
+
+// Facebook OAuth
+passport.use(new FacebookStrategy({
+    clientID: process.env.FACEBOOK_APP_ID,
+    clientSecret: process.env.FACEBOOK_APP_SECRET,
+    callbackURL: `${process.env.API_URL}/api/auth/facebook/callback`,
+    profileFields: ['id', 'displayName', 'emails']
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    // Similar to Google implementation
+  }
+));
+
+// Auth routes
+app.get('/api/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+app.get('/api/auth/google/callback', passport.authenticate('google', { failureRedirect: '/login' }), (req, res) => {
+  res.redirect('https://getedil.vercel.app');
+});
+
+app.get('/api/auth/facebook', passport.authenticate('facebook', { scope: ['email'] }));
+app.get('/api/auth/facebook/callback', passport.authenticate('facebook', { failureRedirect: '/login' }), (req, res) => {
+  res.redirect('https://getedil.vercel.app');
+});
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
