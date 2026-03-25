@@ -1,4 +1,3 @@
-// server.js - COMPLETE WITH COUPON USAGE RECORDING
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
@@ -6,6 +5,8 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
+const csv = require('csv-parser');
+const stream = require('stream');
 require('dotenv').config();
 
 const app = express();
@@ -908,7 +909,6 @@ app.get('/api/orders/:id', async (req, res) => {
     }
 });
 
-// ==================== ORDERS ENDPOINT WITH COUPON USAGE RECORDING ====================
 app.post('/api/orders', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     
@@ -983,9 +983,7 @@ app.post('/api/orders', async (req, res) => {
     }
 });
 
-// ==================== SELLER ANALYTICS ENDPOINTS ====================
-
-// Get seller analytics
+// ==================== SELLER ANALYTICS ENDPOINT ====================
 app.get('/api/seller/analytics', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     
@@ -999,372 +997,6 @@ app.get('/api/seller/analytics', async (req, res) => {
         
         const { period = 'week' } = req.query;
         
-        // Get seller's products
-        const { data: products, error: productsError } = await supabase
-            .from('digital_products')
-            .select('id, name, price')
-            .eq('seller_id', user.id);
-        
-        if (productsError) throw productsError;
-        
-        const productIds = products.map(p => p.id);
-        
-        // Calculate date range
-        let interval = '7 days';
-        if (period === 'month') interval = '30 days';
-        if (period === 'year') interval = '365 days';
-        
-        // Get orders for seller's products
-        const { data: orderItems, error: ordersError } = await supabase
-            .from('order_items')
-            .select(`
-                *,
-                orders!inner (created_at, order_number, status)
-            `)
-            .in('product_id', productIds)
-            .gte('orders.created_at', new Date(new Date() - new Date(interval)).toISOString());
-        
-        if (ordersError) throw ordersError;
-        
-        // Calculate totals
-        const totalRevenue = orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        const totalOrders = new Set(orderItems.map(item => item.order_id)).size;
-        
-        // Daily sales data
-        const dailySales = {};
-        orderItems.forEach(item => {
-            const date = new Date(item.orders.created_at).toISOString().split('T')[0];
-            if (!dailySales[date]) {
-                dailySales[date] = { date, revenue: 0, orders: 0 };
-            }
-            dailySales[date].revenue += item.price * item.quantity;
-            dailySales[date].orders += 1;
-        });
-        
-        // Top products
-        const productSales = {};
-        orderItems.forEach(item => {
-            const product = products.find(p => p.id === item.product_id);
-            if (!productSales[item.product_id]) {
-                productSales[item.product_id] = {
-                    id: item.product_id,
-                    name: product?.name || 'Unknown',
-                    sales: 0,
-                    revenue: 0
-                };
-            }
-            productSales[item.product_id].sales += item.quantity;
-            productSales[item.product_id].revenue += item.price * item.quantity;
-        });
-        
-        const topProducts = Object.values(productSales).sort((a, b) => b.sales - a.sales).slice(0, 5);
-        
-        // Category breakdown
-        const categorySales = {};
-        orderItems.forEach(item => {
-            const product = products.find(p => p.id === item.product_id);
-            const category = product?.category || 'uncategorized';
-            if (!categorySales[category]) {
-                categorySales[category] = { category, sales: 0 };
-            }
-            categorySales[category].sales += item.quantity;
-        });
-        
-        const categoryBreakdown = Object.values(categorySales).map(c => ({
-            category: c.category,
-            sales: c.sales
-        }));
-        
-        // Recent orders
-        const recentOrders = orderItems
-            .sort((a, b) => new Date(b.orders.created_at) - new Date(a.orders.created_at))
-            .slice(0, 10)
-            .map(item => ({
-                id: item.order_id,
-                order_number: item.orders.order_number,
-                product_name: products.find(p => p.id === item.product_id)?.name || 'Unknown',
-                amount: item.price * item.quantity,
-                status: item.orders.status,
-                created_at: item.orders.created_at
-            }));
-        
-        res.json({
-            totalRevenue,
-            totalOrders,
-            totalProducts: productIds.length,
-            avgOrderValue: totalOrders > 0 ? (totalRevenue / totalOrders).toFixed(2) : 0,
-            conversionRate: ((totalOrders / (totalOrders + 100)) * 100).toFixed(1),
-            dailySales: Object.values(dailySales).sort((a, b) => a.date.localeCompare(b.date)),
-            topProducts,
-            categoryBreakdown,
-            recentOrders
-        });
-        
-    } catch (error) {
-        console.error('Analytics error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// ==================== BULK UPLOAD ENDPOINT ====================
-const csv = require('csv-parser');
-const stream = require('stream');
-
-// csvUpload uses the existing multer variable declared at the top
-const csvUpload = multer({ storage: multer.memoryStorage() });
-
-app.post('/api/seller/bulk-upload', csvUpload.single('file'), async (req, res) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-        return res.status(401).json({ error: 'Not authenticated' });
-    }
-    
-    try {
-        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-        if (authError) throw authError;
-        
-        if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded' });
-        }
-        
-        const results = [];
-        const errors = [];
-        let successCount = 0;
-        
-        const csvBuffer = req.file.buffer;
-        const readableStream = new stream.Readable();
-        readableStream.push(csvBuffer);
-        readableStream.push(null);
-        
-        const validCategories = ['documents', 'graphics', 'software', 'audio', 'video', 'ebooks', 'photos', '3d'];
-        
-        await new Promise((resolve) => {
-            readableStream
-                .pipe(csv())
-                .on('data', async (row) => {
-                    const { name, description, price, is_free, category, file_format } = row;
-                    
-                    if (!name) {
-                        errors.push(`Missing name in row: ${JSON.stringify(row)}`);
-                        return;
-                    }
-                    
-                    if (category && !validCategories.includes(category)) {
-                        errors.push(`Invalid category "${category}" for product "${name}". Valid: ${validCategories.join(', ')}`);
-                        return;
-                    }
-                    
-                    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-                    const isFree = is_free === 'true' || is_free === true;
-                    const productPrice = isFree ? 0 : parseFloat(price) || 0;
-                    
-                    try {
-                        const { error: insertError } = await supabase
-                            .from('digital_products')
-                            .insert({
-                                seller_id: user.id,
-                                name,
-                                slug,
-                                description: description || '',
-                                price: productPrice,
-                                is_free: isFree,
-                                category: category || 'documents',
-                                file_format: file_format || 'pdf',
-                                status: 'active'
-                            });
-                        
-                        if (insertError) {
-                            errors.push(`Error inserting "${name}": ${insertError.message}`);
-                        } else {
-                            successCount++;
-                            results.push({ name, success: true });
-                        }
-                    } catch (err) {
-                        errors.push(`Error inserting "${name}": ${err.message}`);
-                    }
-                })
-                .on('end', () => {
-                    resolve();
-                });
-        });
-        
-        res.json({
-            success: errors.length === 0,
-            total: results.length + errors.length,
-            successCount,
-            failedCount: errors.length,
-            errors: errors.slice(0, 20)
-        });
-        
-    } catch (error) {
-        console.error('Bulk upload error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-// ==================== EMAIL FUNCTIONS ====================
-
-app.post('/api/email/order-confirmation', async (req, res) => {
-    const { email, name, orderNumber, total, subtotal, discount, coupon_code, items, shippingAddress } = req.body;
-    
-    const itemsHtml = items.map(item => `
-        <tr>
-            <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.name}
-                        <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">${item.quantity}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right;">₿ ${item.price}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right;">₿ ${(item.price * item.quantity).toLocaleString()}</td>
-        </tr>
-    `).join('');
-    
-    const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>Order Confirmation - GETEDIL</title>
-            <style>
-                body { font-family: Arial, sans-serif; background-color: #f5f5f5; margin: 0; padding: 0; }
-                .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; }
-                .header { background: linear-gradient(135deg, #0B4F2E, #D4AF37); padding: 20px; text-align: center; color: white; }
-                .content { padding: 30px; }
-                .order-details { background-color: #f9f9f9; padding: 15px; border-radius: 8px; margin: 20px 0; }
-                table { width: 100%; border-collapse: collapse; }
-                th { text-align: left; padding: 10px; background-color: #f0f0f0; }
-                .total { font-size: 18px; font-weight: bold; text-align: right; margin-top: 20px; padding-top: 10px; border-top: 2px solid #eee; }
-                .button { display: inline-block; background-color: #0B4F2E; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin-top: 20px; }
-                .footer { background-color: #f5f5f5; padding: 20px; text-align: center; color: #666; font-size: 12px; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2>Order Confirmation</h2>
-                </div>
-                <div class="content">
-                    <h2>Thank you for your order, ${name}! 🎉</h2>
-                    <p>Your order has been confirmed and is being processed.</p>
-                    
-                    <div class="order-details">
-                        <p><strong>Order Number:</strong> ${orderNumber}</p>
-                        <p><strong>Order Date:</strong> ${new Date().toLocaleString()}</p>
-                    </div>
-                    
-                    <h3>Order Summary</h3>
-                    <table border="1">
-                        <thead>
-                            <tr><th>Product</th><th>Quantity</th><th>Unit Price</th><th>Total</th>
-                                                    </thead>
-                        <tbody>
-                            ${itemsHtml}
-                        </tbody>
-                    </table>
-                    
-                    <div style="margin-top: 20px;">
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                            <span>Subtotal:</span>
-                            <span>₿ ${subtotal?.toLocaleString() || total?.toLocaleString()}</span>
-                        </div>
-                        ${discount > 0 ? `
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; color: #10B981;">
-                            <span>Discount ${coupon_code ? `(${coupon_code})` : ''}:</span>
-                            <span>- ₿ ${discount.toLocaleString()}</span>
-                        </div>
-                        ` : ''}
-                        <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 18px; margin-top: 10px; padding-top: 10px; border-top: 2px solid #eee;">
-                            <span>Total:</span>
-                            <span style="color: #0B4F2E;">₿ ${total?.toLocaleString()}</span>
-                        </div>
-                    </div>
-                    
-                    ${shippingAddress ? `
-                    <div style="margin-top: 20px;">
-                        <h3>Shipping Address</h3>
-                        <p>
-                            ${shippingAddress.full_name}<br>
-                            ${shippingAddress.address}<br>
-                            ${shippingAddress.city}, ${shippingAddress.country}
-                        </p>
-                    </div>
-                    ` : ''}
-                    
-                    <div style="text-align: center; margin-top: 30px;">
-                        <a href="https://getedil.vercel.app/orders" class="button">Track Your Order →</a>
-                    </div>
-                </div>
-                <div class="footer">
-                    <p>© 2026 GETEDIL - Ethiopia's Digital Ecosystem</p>
-                    <p>Need help? Contact us at support@getedil.com</p>
-                </div>
-            </div>
-        </body>
-        </html>
-    `;
-    
-    try {
-        await transporter.sendMail({
-            from: process.env.EMAIL_USER,
-            to: email,
-            subject: `Order Confirmation #${orderNumber}`,
-            html
-        });
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Email error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.post('/api/email/contact', async (req, res) => {
-    const { name, email, subject, message } = req.body;
-    
-    const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>Contact Form Submission - GETEDIL</title>
-        </head>
-        <body>
-            <h2>New Contact Form Submission</h2>
-            <p><strong>From:</strong> ${name} (${email})</p>
-            <p><strong>Subject:</strong> ${subject}</p>
-            <p><strong>Message:</strong></p>
-            <p>${message.replace(/\n/g, '<br>')}</p>
-        </body>
-        </html>
-    `;
-    
-    try {
-        await transporter.sendMail({
-            from: process.env.EMAIL_USER,
-            to: process.env.EMAIL_USER,
-            subject: `Contact Form: ${subject}`,
-            html
-        });
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Email error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// ==================== SELLER ANALYTICS ENDPOINTS ====================
-
-// Get seller analytics
-app.get('/api/seller/analytics', async (req, res) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-        return res.status(401).json({ error: 'Not authenticated' });
-    }
-    
-    try {
-        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-        if (authError) throw authError;
-        
-        const { period = 'week' } = req.query;
-        
-        // Get seller's products
         const { data: products, error: productsError } = await supabase
             .from('digital_products')
             .select('id, name, price, category')
@@ -1484,9 +1116,6 @@ app.get('/api/seller/analytics', async (req, res) => {
 });
 
 // ==================== BULK UPLOAD ENDPOINT ====================
-const csv = require('csv-parser');
-const stream = require('stream');
-
 const csvUpload = multer({ storage: multer.memoryStorage() });
 
 app.post('/api/seller/bulk-upload', csvUpload.single('file'), async (req, res) => {
@@ -1579,6 +1208,152 @@ app.post('/api/seller/bulk-upload', csvUpload.single('file'), async (req, res) =
     }
 });
 
+// ==================== EMAIL FUNCTIONS ====================
+
+app.post('/api/email/order-confirmation', async (req, res) => {
+    const { email, name, orderNumber, total, subtotal, discount, coupon_code, items, shippingAddress } = req.body;
+    
+    const itemsHtml = items.map(item => `
+        <tr>
+            <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.name}</td>
+            <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">${item.quantity}</td>
+            <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right;">₿ ${item.price}</td>
+            <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right;">₿ ${(item.price * item.quantity).toLocaleString()}</td>
+        </tr>
+    `).join('');
+    
+    const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Order Confirmation - GETEDIL</title>
+            <style>
+                body { font-family: Arial, sans-serif; background-color: #f5f5f5; margin: 0; padding: 0; }
+                .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; }
+                .header { background: linear-gradient(135deg, #0B4F2E, #D4AF37); padding: 20px; text-align: center; color: white; }
+                .content { padding: 30px; }
+                .order-details { background-color: #f9f9f9; padding: 15px; border-radius: 8px; margin: 20px 0; }
+                table { width: 100%; border-collapse: collapse; }
+                th { text-align: left; padding: 10px; background-color: #f0f0f0; }
+                .total { font-size: 18px; font-weight: bold; text-align: right; margin-top: 20px; padding-top: 10px; border-top: 2px solid #eee; }
+                .button { display: inline-block; background-color: #0B4F2E; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin-top: 20px; }
+                .footer { background-color: #f5f5f5; padding: 20px; text-align: center; color: #666; font-size: 12px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>Order Confirmation</h2>
+                </div>
+                <div class="content">
+                    <h2>Thank you for your order, ${name}! 🎉</h2>
+                    <p>Your order has been confirmed and is being processed.</p>
+                    
+                    <div class="order-details">
+                        <p><strong>Order Number:</strong> ${orderNumber}</p>
+                        <p><strong>Order Date:</strong> ${new Date().toLocaleString()}</p>
+                    </div>
+                    
+                    <h3>Order Summary</h3>
+                    <table border="1">
+                        <thead>
+                            <tr><th>Product</th><th>Quantity</th><th>Unit Price</th><th>Total</th></tr>
+                        </thead>
+                        <tbody>
+                            ${itemsHtml}
+                        </tbody>
+                    </table>
+                    
+                    <div style="margin-top: 20px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span>Subtotal:</span>
+                            <span>₿ ${subtotal?.toLocaleString() || total?.toLocaleString()}</span>
+                        </div>
+                        ${discount > 0 ? `
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; color: #10B981;">
+                            <span>Discount ${coupon_code ? `(${coupon_code})` : ''}:</span>
+                            <span>- ₿ ${discount.toLocaleString()}</span>
+                        </div>
+                        ` : ''}
+                        <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 18px; margin-top: 10px; padding-top: 10px; border-top: 2px solid #eee;">
+                            <span>Total:</span>
+                            <span style="color: #0B4F2E;">₿ ${total?.toLocaleString()}</span>
+                        </div>
+                    </div>
+                    
+                    ${shippingAddress ? `
+                    <div style="margin-top: 20px;">
+                        <h3>Shipping Address</h3>
+                        <p>
+                            ${shippingAddress.full_name}<br>
+                            ${shippingAddress.address}<br>
+                            ${shippingAddress.city}, ${shippingAddress.country}
+                        </p>
+                    </div>
+                    ` : ''}
+                    
+                    <div style="text-align: center; margin-top: 30px;">
+                        <a href="https://getedil.vercel.app/orders" class="button">Track Your Order →</a>
+                    </div>
+                </div>
+                <div class="footer">
+                    <p>© 2026 GETEDIL - Ethiopia's Digital Ecosystem</p>
+                    <p>Need help? Contact us at support@getedil.com</p>
+                </div>
+            </div>
+        </body>
+        </html>
+    `;
+    
+    try {
+        await transporter.sendMail({
+            from: process.env.EMAIL_USER,
+            to: email,
+            subject: `Order Confirmation #${orderNumber}`,
+            html
+        });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Email error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/email/contact', async (req, res) => {
+    const { name, email, subject, message } = req.body;
+    
+    const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Contact Form Submission - GETEDIL</title>
+        </head>
+        <body>
+            <h2>New Contact Form Submission</h2>
+            <p><strong>From:</strong> ${name} (${email})</p>
+            <p><strong>Subject:</strong> ${subject}</p>
+            <p><strong>Message:</strong></p>
+            <p>${message.replace(/\n/g, '<br>')}</p>
+        </body>
+        </html>
+    `;
+    
+    try {
+        await transporter.sendMail({
+            from: process.env.EMAIL_USER,
+            to: process.env.EMAIL_USER,
+            subject: `Contact Form: ${subject}`,
+            html
+        });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Email error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
@@ -1586,6 +1361,8 @@ app.listen(PORT, () => {
     console.log(`📸 Image upload enabled`);
     console.log(`🔗 Related products endpoint enabled`);
     console.log(`🎟️ Coupon system enabled`);
+    console.log(`📊 Seller analytics enabled`);
+    console.log(`📤 Bulk upload enabled`);
 });
 
 module.exports = app;
