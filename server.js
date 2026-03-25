@@ -1354,6 +1354,179 @@ app.post('/api/email/contact', async (req, res) => {
     }
 });
 
+// ==================== PDF INVOICE ENDPOINT ====================
+const PDFDocument = require('pdfkit');
+
+app.get('/api/orders/:id/invoice', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError) throw authError;
+        
+        const { id } = req.params;
+        
+        // Get order details
+        const { data: order, error: orderError } = await supabase
+            .from('orders')
+            .select('*')
+            .eq('id', id)
+            .eq('user_id', user.id)
+            .single();
+        
+        if (orderError || !order) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+        
+        // Get order items
+        const { data: items, error: itemsError } = await supabase
+            .from('order_items')
+            .select('*')
+            .eq('order_id', id);
+        
+        if (itemsError) throw itemsError;
+        
+        // Get user profile
+        const { data: profile } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', user.id)
+            .single();
+        
+        // Create PDF
+        const doc = new PDFDocument({ margin: 50, size: 'A4' });
+        
+        // Set response headers
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=invoice_${order.order_number}.pdf`);
+        
+        doc.pipe(res);
+        
+        // Header with Logo
+        doc.fontSize(24)
+           .font('Helvetica-Bold')
+           .fillColor('#0B4F2E')
+           .text('GETEDIL', { align: 'center' });
+        doc.fontSize(12)
+           .font('Helvetica')
+           .fillColor('#666666')
+           .text('Ethiopia\'s Digital Ecosystem', { align: 'center' });
+        doc.moveDown();
+        
+        // Invoice Title
+        doc.fontSize(20)
+           .font('Helvetica-Bold')
+           .fillColor('#000000')
+           .text('INVOICE', { align: 'center' });
+        doc.moveDown();
+        
+        // Invoice Details
+        doc.fontSize(10)
+           .font('Helvetica')
+           .fillColor('#333333');
+        
+        // Left Column - Order Info
+        doc.text(`Invoice Number: INV-${order.order_number}`, 50, 150);
+        doc.text(`Order Date: ${new Date(order.created_at).toLocaleDateString()}`, 50, 165);
+        doc.text(`Order Status: ${order.status.toUpperCase()}`, 50, 180);
+        
+        // Right Column - Customer Info
+        doc.text(`Bill To:`, 350, 150);
+        doc.text(`${profile?.full_name || 'Customer'}`, 350, 165);
+        doc.text(`${profile?.email || ''}`, 350, 180);
+        if (profile?.phone) doc.text(`${profile.phone}`, 350, 195);
+        
+        // Shipping Address
+        if (order.shipping_address) {
+            const addr = order.shipping_address;
+            doc.text(`Ship To:`, 350, 225);
+            doc.text(`${addr.full_name || ''}`, 350, 240);
+            doc.text(`${addr.address || ''}`, 350, 255);
+            doc.text(`${addr.city || ''}, ${addr.country || 'Ethiopia'}`, 350, 270);
+        }
+        
+        doc.moveDown(2);
+        
+        // Items Table Header
+        let yPosition = 320;
+        doc.font('Helvetica-Bold')
+           .fillColor('#0B4F2E')
+           .rect(50, yPosition - 5, 495, 25)
+           .fill('#F0FDF4');
+        doc.fillColor('#0B4F2E')
+           .text('Product', 60, yPosition)
+           .text('Quantity', 300, yPosition, { width: 80, align: 'center' })
+           .text('Unit Price', 380, yPosition, { width: 80, align: 'center' })
+           .text('Total', 460, yPosition, { width: 80, align: 'center' });
+        
+        yPosition += 25;
+        
+        // Items Table Rows
+        doc.font('Helvetica')
+           .fillColor('#333333');
+        
+        let subtotal = 0;
+        items.forEach((item, index) => {
+            const total = item.price * item.quantity;
+            subtotal += total;
+            
+            doc.text(item.product_name, 60, yPosition, { width: 230 })
+               .text(item.quantity.toString(), 300, yPosition, { width: 80, align: 'center' })
+               .text(`₿ ${item.price.toLocaleString()}`, 380, yPosition, { width: 80, align: 'center' })
+               .text(`₿ ${total.toLocaleString()}`, 460, yPosition, { width: 80, align: 'center' });
+            yPosition += 20;
+            
+            // Add new page if needed
+            if (yPosition > 700 && index < items.length - 1) {
+                doc.addPage();
+                yPosition = 50;
+            }
+        });
+        
+        // Totals Section
+        yPosition += 20;
+        doc.font('Helvetica-Bold');
+        doc.text('Subtotal:', 380, yPosition, { width: 80, align: 'right' })
+           .text(`₿ ${subtotal.toLocaleString()}`, 460, yPosition, { width: 80, align: 'right' });
+        yPosition += 20;
+        
+        // Discount if applied
+        const discount = order.discount_amount || 0;
+        if (discount > 0) {
+            doc.fillColor('#10B981')
+               .text('Discount:', 380, yPosition, { width: 80, align: 'right' })
+               .text(`- ₿ ${discount.toLocaleString()}`, 460, yPosition, { width: 80, align: 'right' });
+            yPosition += 20;
+        }
+        
+        // Total
+        const total = order.total_amount;
+        doc.fillColor('#0B4F2E')
+           .font('Helvetica-Bold')
+           .fontSize(12)
+           .text('Total:', 380, yPosition, { width: 80, align: 'right' })
+           .text(`₿ ${total.toLocaleString()}`, 460, yPosition, { width: 80, align: 'right' });
+        
+        // Footer
+        const footerY = 750;
+        doc.fontSize(8)
+           .fillColor('#999999')
+           .text('Thank you for shopping at GETEDIL!', 50, footerY, { align: 'center', width: 495 })
+           .text('For questions about this invoice, please contact support@getedil.com', 50, footerY + 15, { align: 'center', width: 495 });
+        
+        // Finalize PDF
+        doc.end();
+        
+    } catch (error) {
+        console.error('PDF generation error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 GETEDIL API running on port ${PORT}`);
