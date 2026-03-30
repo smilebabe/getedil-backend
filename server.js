@@ -16,43 +16,66 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 app.use(cors());
 app.use(express.json());
 
-// --- 3. AUTHENTICATION PILLAR (Awaiting your logic) ---
+/**
+ * AUTH MIDDLEWARE:
+ * This ensures that only logged-in users (from your login.js)
+ * can access protected features.
+ */
+const authenticateUser = async (req, res, next) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: "No token provided" });
 
-app.post('/api/auth/signup', async (req, res) => {
-    // I will update this once you provide your code
-    res.status(501).json({ message: "Signup logic being updated..." });
-});
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) return res.status(401).json({ error: "Invalid session" });
 
-app.post('/api/auth/login', async (req, res) => {
-    // I will update this once you provide your code
-    res.status(501).json({ message: "Login logic being updated..." });
-});
+    req.user = user; // Pass the user info to the next function
+    next();
+};
 
-// --- 4. JOB MATCHING PILLAR (Verified Working ✅) ---
-app.post('/api/jobs/match', async (req, res) => {
+// --- 3. PILLAR 2: PROTECTED JOB MATCHING ---
+// Now users MUST be logged in to use the AI
+app.post('/api/jobs/match', authenticateUser, async (req, res) => {
     const { user_bio, language = "Amharic" } = req.body; 
     try {
+        console.log(`🔍 AI Matching for User: ${req.user.email}`);
+        
         const { data: jobs, error } = await supabase.from('jobs').select('*').limit(10); 
         if (error) throw error;
-        if (!jobs || jobs.length === 0) return res.json({ success: true, message: "No jobs in DB." });
 
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash", 
             contents: [{
                 role: "user",
                 parts: [{ 
-                    text: `Act as the GETEDIL AI Assistant. Match this user: "${user_bio}" to these jobs: ${JSON.stringify(jobs)}. Explain matches in ${language} with a match score.` 
+                    text: `Act as the GETEDIL AI. Match User: "${user_bio}" to Jobs: ${JSON.stringify(jobs)}. Explain in ${language}.` 
                 }]
             }]
         });
 
-        res.json({ success: true, analysis: response.text, meta: { model: "gemini-2.5-flash" } });
+        res.json({ 
+            success: true, 
+            analysis: response.text,
+            user: req.user.email // Confirms who is logged in
+        });
+
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
+// --- 4. PILLAR 1: DIRECTORY ---
+app.post('/api/listings/add', async (req, res) => {
+    // Logic for adding business listings
+    const { name, category, location, description, phone } = req.body;
+    const { data, error } = await supabase.from('listings').insert([
+        { name, category, location, description, phone_number: phone }
+    ]).select();
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, data });
+});
+
 // --- 5. START SERVER ---
 app.listen(PORT, () => {
-    console.log(`🚀 GETEDIL LIVE | Port: ${PORT} | Mode: 2026 Stable`);
+    console.log(`🚀 GETEDIL Backend LIVE on Port: ${PORT}`);
 });
